@@ -1,0 +1,132 @@
+# ============================================================
+# run_skills_scheduler.py 任务配置
+# 每个任务对应一次 run_jql_with_skill_demo.py 的调用
+#
+# 字段说明:
+#   name       : 任务名称（用于输出/日志文件命名，如 Nagracas / vmxcas）
+#   cron       : 标准 5 段 cron 表达式（分 时 日 月 周）
+#   skill      : 分析所使用的技能名称（传给 --skill；留空则不在 prompt 中指定技能）
+#   jql        : JQL 查询语句
+#   email      : 收件人邮箱（逗号分隔；结果会复制到 user_data/<用户名小写>/ 下）
+#   max_issues : 最多送 AI 分析的条数（0=不限制）
+# ============================================================
+tasks:
+  - name: over_60round_BT
+    cron: "48 14 * * *"
+    skill: "analyze_bt_log"
+    jql: |-
+      key in (OTT-84222,TV-252209,TV-252366,TV-252686,TV-252094,TV-243794,OTT-100792)
+    email: "lingzhi.bi@amlogic.com"
+    max_issues: 1
+  # - name: Display
+  #   cron: "44 10 * * *"
+  #   skill: "aml-display-debug"
+  #   jql: |-
+  #     key in (TV-252675 ,TV-252090,TV-250788,TV-249112,TV-249111)
+  #   # email: "Zhou.Han@amlogic.com"
+  #   max_issues: 0
+  # - name: Display
+  #   cron: "08 22 * * *"
+  #   skill: "aml-display-debug"
+  #   jql: |-
+  #     created > 2026-06-01 AND created < now()  AND status = Closed AND assignee in (Baocheng.Sun ,Tianhua.Sun,En.Liu,Fuqing.Chen,Guofei.Xue,Yiming.Sun,Min.Zhu,Ao.Xu, Wenlong.Zhang, Linfang.Zhao, Junqing.Yuan, Congyang.Huang, Yujun.Zhang, dijie.pan,zongdong.jiao,Wenjie.Qiao,Ruofei.Zhao,hang.cheng,Cheng.Li,zhou.han)
+  #   email: "Zhou.Han@amlogic.com"
+  #   max_issues: 0
+
+  # - name: Nagracas
+  #   cron: "0 22 * * *"
+  #   skill: "nagracas_cas_analysis"
+  #   jql: 'issuetype = Bug AND status = Closed AND "Root Cause" is not EMPTY AND "How to fix" is not EMPTY AND attachments is not EMPTY AND labels in (FAE-F-M-CAS-Nagra, FAE-A-M-CAS-Nagra) AND assignee in (Minhong.Yang, chao.yin, Chengshun.Wang) order by updated DESC'
+  #   email: "Minhong.Yang@amlogic.com"
+  #   max_issues: 0
+  
+  # - name: VMX
+  #   cron: "30 11 * * *"
+  #   skill: "vmx-cas-issue-analysis"
+  #   jql: |-
+  #     issuetype = Bug 
+  #     AND status = Closed 
+  #     AND "Root Cause" is not EMPTY 
+  #     AND "How to fix" is not EMPTY 
+  #     AND attachments is not EMPTY 
+  #     AND text ~ "VMX" 
+  #     AND assignee in (
+  #       zhongwei.zhao, 
+  #       Jack.Zhang, 
+  #       Chao.Yin, 
+  #       Chengshun.Wang, 
+  #       Kai.Song, 
+  #       Zhiyuan.Liu, 
+  #       pengfei.liu,
+  #       shipeng.sun
+  #       ) 
+  #     order by updated DESC
+  #   email: "Jack.Zhang@amlogic.com"
+  #   max_issues: 0
+  
+  # - name: BT
+  #   cron: "0 19 * * *"
+  #   skill: "analyze_bt_log"
+  #   jql: |-
+  #     project in ("OTT projects", "TV Projects")
+  #     AND issuetype = Bug
+  #     AND status = Closed
+  #     AND resolution NOT IN ("Cannot Reproduce", "Won't Fix")
+  #     AND "Root Cause" IS NOT EMPTY
+  #     AND "How to fix" IS NOT EMPTY
+  #     AND attachments IS NOT EMPTY
+  #     AND (
+  #         component IN (BT)
+  #         OR labels IN (
+  #             FAE-A-M-BT,
+  #             FAE-F-M-BT
+  #         )
+  #     )
+  #     and created >=  2025-06-30 and created  <=  2026-06-30
+  #     ORDER BY updated DESC
+  #   email: "Olin.Cui@amlogic.com"
+  #   max_issues: 0
+
+  # - name: WiFi
+  #   cron: "30 13 * * *"
+  #   skill: "wifi-bug-analyzer"
+  #   jql: |-
+  #     project in ("OTT projects", "TV Projects")
+  #     AND issuetype = Bug
+  #     AND status = Closed
+  #     AND resolution NOT IN ("Cannot Reproduce", "Won't Fix")
+  #     AND "Root Cause" IS NOT EMPTY
+  #     AND "How to fix" IS NOT EMPTY
+  #     AND attachments IS NOT EMPTY
+  #     AND (
+  #         component IN (WiFi)
+  #         OR labels IN (
+  #             FAE-A-M-WiFi,
+  #             FAE-F-M-WiFi
+  #         )
+  #     )
+  #     and created >=  2025-06-30 and created  <=  2026-06-30
+  #     ORDER BY updated DESC
+  #   email: "Jiaxiang.Wang@amlogic.com"
+  #   max_issues: 0
+
+  # - name: Irdeto
+  #   cron: "13 15 * * *"
+  #   skill: "irdeto-cas-issue-analysis"
+  #   jql: |-
+  #     issuetype = Bug
+  #     AND "Root Cause" is not EMPTY
+  #     AND status = Closed
+  #     AND text ~ "S905C3"
+  #     AND assignee in (Jack.Zhang, Chao.Yin, Chengshun.Wang, weishi.zhang)
+  #     ORDER BY summary DESC, updated DESC
+  #   email: "Jack.Zhang@amlogic.com"
+  #   max_issues: 0
+
+  # ── 新增任务示例（按需取消注释并修改）──
+  # - name: vmxcas
+  #   cron: "0 23 * * *"
+  #   skill: "vmx-cas-issue-analysis"
+  #   jql: 'issuetype = Bug AND status = Closed AND labels in (FAE-F-M-CAS-VMX) order by updated DESC'
+  #   email: "Nan.Li@amlogic.com"
+  #   max_issues: 0

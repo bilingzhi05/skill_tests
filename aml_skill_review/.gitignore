@@ -1,0 +1,19 @@
+# 依赖（本地 pnpm install 恢复）
+node_modules/
+
+# 构建产物（pnpm dev / pnpm build 自动生成）
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# pnpm 本地缓存
+.pnpm-store/
+.pnpm-cache/
+
+# 运行时数据库与用户数据（含 WAL/SHM 附属文件）
+data/*.db
+data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+data/user_data/

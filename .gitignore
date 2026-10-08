@@ -1,0 +1,53 @@
+# ============================================================
+# skill_tests 顶层 .gitignore
+# 排除：日志 / xlsx / 缓存 / 前端依赖 / 运行时数据库 / 构建产物
+# ============================================================
+
+# ───── 日志文件 ─────
+*.log
+output.log
+
+# ───── xlsx 数据 / 结果文件 ─────
+*.xlsx
+*.xls
+*.xlsm
+
+# ───── 缓存与临时目录 ─────
+__pycache__/
+*.py[cod]
+*$py.class
+.cache/
+*.lock
+
+# ───── 前端依赖（pnpm install 后下载，不入库）─────
+node_modules/
+
+# ───── 前端构建产物 / 本地 pnpm 缓存 ─────
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+.pnpm-store/
+.pnpm-cache/
+
+# ───── 运行时数据库与用户数据 ─────
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-journal
+data/user_data/
+**/user_data/
+
+# ───── 任务运行结果目录（xlsx + log + pid 锁文件，全部自动生成）─────
+process_skills/skills_result_output/
+process_skills/.locks/
+
+# ───── 系统/IDE 杂项 ─────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
