@@ -1,0 +1,7 @@
+# Skill 任务后端 FastAPI 服务依赖
+# 安装：pip install -r server_requirements.txt
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
+PyYAML>=6.0
+# openpyxl 已随评审/分析工具链安装（结果过滤副本使用）

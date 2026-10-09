@@ -3,9 +3,19 @@
 # 排除：日志 / xlsx / 缓存 / 前端依赖 / 运行时数据库 / 构建产物
 # ============================================================
 
+# ───── 环境变量（含敏感凭据，仅保留模板）─────
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
+
 # ───── 日志文件 ─────
 *.log
 output.log
+logs/
 
 # ───── xlsx 数据 / 结果文件 ─────
 *.xlsx
@@ -43,6 +53,9 @@ data/user_data/
 # ───── 任务运行结果目录（xlsx + log + pid 锁文件，全部自动生成）─────
 process_skills/skills_result_output/
 process_skills/.locks/
+
+# ───── FastAPI 后端运行数据（任务状态 / 内部 token / 运行日志）─────
+process_skills/server_data/
 
 # ───── 系统/IDE 杂项 ─────
 .DS_Store

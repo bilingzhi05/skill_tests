@@ -28,6 +28,55 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Windows UTF-8 编码修复（同 demo_debug_jira.py）
+# 必须在任何业务 import 之前执行：import 阶段打印的中文（如 SECURITY 提示）
+# 若仍使用 Windows 默认 GBK 编码输出，父进程用 UTF-8 读取时会乱码。
+# ═══════════════════════════════════════════════════════════════════════════════
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+_orig_sh_init = logging.StreamHandler.__init__
+
+def _utf8_sh_init(self, stream=None):
+    if stream is None:
+        stream = sys.stderr
+    try:
+        enc = getattr(stream, "encoding", "") or ""
+        if enc.lower() in ("gbk", "cp936", "cp950", "cp1252", "cp932"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    _orig_sh_init(self, stream)
+
+logging.StreamHandler.__init__ = _utf8_sh_init
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# .env 兜底加载：进程环境变量优先，缺失的键再用 skill_tests/.env 补齐并写入
+# os.environ（不覆盖已存在的环境变量）。这样 JIRA_BOT_* / SMTP_* 等写到 .env
+# 即可生效，无需手动 set。
+# ═══════════════════════════════════════════════════════════════════════════════
+def _load_skill_tests_env() -> None:
+    try:
+        from dotenv import dotenv_values
+    except ImportError:
+        return
+    # 本文件位于 process_skills/，.env 在其上一级 skill_tests/
+    candidates = [Path(__file__).resolve().parent.parent / ".env",
+                  Path.cwd() / ".env"]
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            values = dotenv_values(candidate) or {}
+        except Exception:
+            continue
+        for key, value in values.items():
+            os.environ.setdefault(key, value)
+        return
+
+_load_skill_tests_env()
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 0. 路径设置
 # ═══════════════════════════════════════════════════════════════════════════════
 _HERE = Path(__file__).resolve().parent
@@ -84,27 +133,6 @@ except Exception as _judge_import_err:  # pragma: no cover
     run_agent_analysis_judge_for_jira = None
     _JUDGE_AVAILABLE = False
     print(f"  WARN: judge 模块导入失败，将跳过结论判定: {_judge_import_err}")
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 3. Windows UTF-8 编码修复（同 demo_debug_jira.py）
-# ═══════════════════════════════════════════════════════════════════════════════
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-_orig_sh_init = logging.StreamHandler.__init__
-
-def _utf8_sh_init(self, stream=None):
-    if stream is None:
-        stream = sys.stderr
-    try:
-        enc = getattr(stream, "encoding", "") or ""
-        if enc.lower() in ("gbk", "cp936", "cp950", "cp1252", "cp932"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    _orig_sh_init(self, stream)
-
-logging.StreamHandler.__init__ = _utf8_sh_init
 
 logging.basicConfig(
     level=logging.INFO,

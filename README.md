@@ -7,7 +7,7 @@ Jira 工单「Skill 大模型分析 + 人工评审」一体化工具集。
 | 子目录 | 角色 | 技术栈 |
 |---|---|---|
 | [`process_skills/`](process_skills/) | **生产端**：按 JQL 批量拉取 Jira 工单 → 调用大模型 Skill 分析 → 输出 xlsx | Python 3 + cron |
-| [`aml_skill_review/`](aml_skill_review/) | **消费端**：把上一步生成的 xlsx 导入数据库 → Web 评审界面做人工校验 → 统计一致率 | Next.js 14 + SQLite |
+| [`aml_skill_review/`](aml_skill_review/) | **消费端**：把上一步生成的 xlsx 导入数据库 → Web 评审界面做人工校验 → 统计一致率 | Next.js 16 + SQLite |
 
 整体数据流：
 
@@ -20,6 +20,45 @@ Jira ─ JQL ─▶ run_jql_with_skill_demo.py ──(AI Skill 分析)──▶ 
 
 `process_skills` 负责「跑」——按 cron 定时跑各种 JQL，让 Skill 给出根因判定；
 `aml_skill_review` 负责「审」——把 Skill 跑出来的 xlsx 拉进网页，让人逐条复核、最终统计人工 vs 大模型的一致率。
+
+---
+
+## 新增功能
+
+### 1. Skill 管理系统
+
+在 `aml_skill_review` 中新增了 Skill 管理页面（`/skills`），支持：
+
+- **预览 Skill**：查看 skill 目录文件树和文件内容（SKILL.md 等）
+- **上传/替换 Skill**：上传 zip 包，同类型的 skill 只保留一个（替换式更新）
+- **删除 Skill**：从磁盘和数据库中删除
+- **Owner 权限**：每个 skill 有一个 owner，普通用户只能看到自己的 skill
+- **管理员管理**：管理员可以查看所有 skill 并为 skill 设置 owner
+
+Skill 目录位于 `AmlAgent/expert-skills/log_analyse_skills/`，结构如下：
+```
+log_analyse_skills/
+├── log_analyse/          ← 一个 skill
+├── wifi_bt_skills/       ← skill 类型组
+│   ├── wifi-bug-analyzer/
+│   └── analyze-bt-log/
+└── kernel_skills/
+    ├── timer/
+    ├── kernel-debug/
+    └── ...
+```
+
+### 2. 任务管理系统
+
+在 `aml_skill_review` 中新增了任务管理页面（`/tasks`），支持：
+
+- **启动分析任务**：选择自己的 skill，输入 JQL，启动一次 AI 分析
+- **最大并发控制**：管理员可配置最大并发任务数（默认 2），超过则排队
+- **任务状态**：查看任务进度（queued / running / completed / failed / stopped）
+- **队列位置**：owner 可以看到当前有多少任务运行中、自己排在第几位
+- **日志查看**：实时查看任务运行日志，支持下载日志文件
+- **手动停止**：可手动停止运行中或排队中的任务
+- **结果下载**：下载分析结果 xlsx 文件
 
 ---
 

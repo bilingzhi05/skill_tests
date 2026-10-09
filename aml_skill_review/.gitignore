@@ -17,3 +17,6 @@ data/*.db-journal
 data/*.db-shm
 data/*.db-wal
 data/user_data/
+
+# 任务输出目录（日志 + xlsx 结果）
+data/task_output/

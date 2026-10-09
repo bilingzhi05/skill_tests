@@ -15,7 +15,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import * as XLSX from "xlsx"
 import { toast } from "sonner"
-import { ArrowRight, BarChart3, Download, FileSpreadsheet, Loader2, LogOut, UserRound, Users } from "lucide-react"
+import { ArrowRight, BarChart3, Download, FileSpreadsheet, Loader2, LogOut, UserRound, Users, Wrench, Activity } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Select,
@@ -414,6 +414,24 @@ export function ListPage({ username, isAdmin }: { username: string; isAdmin: boo
           >
             <BarChart3 className="size-4" />
             同Skill结果对比全览
+          </Link>
+
+          {/* Skill 管理 */}
+          <Link
+            href="/skills"
+            className={buttonVariants({ variant: "outline", className: "mt-4 w-full" })}
+          >
+            <Wrench className="size-4" />
+            Skill 管理
+          </Link>
+
+          {/* 任务管理 */}
+          <Link
+            href="/tasks"
+            className={buttonVariants({ variant: "outline", className: "mt-4 w-full" })}
+          >
+            <Activity className="size-4" />
+            Skill 分析任务
           </Link>
 
           {/* 跳转统计页（选中表后才可用） */}
