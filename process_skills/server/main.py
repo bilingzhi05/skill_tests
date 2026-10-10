@@ -14,8 +14,9 @@ Skill 任务后端 —— FastAPI 应用。
 """
 from __future__ import annotations
 
-import re
+import io
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -139,29 +140,44 @@ def api_skill_content(path: str, file: str, caller: Caller = Depends(auth)) -> d
 
 @app.post("/api/backend/skills")
 async def api_upload_skill(
-    skillType: str = Form(...),
-    skillName: str = Form(...),
     owner: str = Form(default=""),
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
     caller: Caller = Depends(auth),
 ) -> dict[str, Any]:
-    skill_type = skillType.strip()
-    skill_name = skillName.strip()
-    if not skill_type or not skill_name:
-        raise HTTPException(status_code=400, detail="skillType / skillName 不能为空")
-    if not re.fullmatch(r"[A-Za-z0-9._\-]+", skill_type) or not re.fullmatch(
-        r"[A-Za-z0-9._\-]+", skill_name
-    ):
-        raise HTTPException(status_code=400, detail="类型/名称只允许字母数字 . _ -")
-    if not file.filename or not file.filename.lower().endswith(".zip"):
-        raise HTTPException(status_code=400, detail="请上传 .zip 文件")
     # 普通用户只能把 owner 设为自己；管理员可指定
     final_owner = owner.strip() if caller.is_admin else caller.username
     if not final_owner:
         final_owner = caller.username
 
-    zip_bytes = await file.read()
-    target = skills_mgr.upload_skill(skill_type, skill_name, zip_bytes, final_owner)
+    if not files:
+        raise HTTPException(status_code=400, detail="请选择要上传的文件或文件夹")
+
+    entries: list[tuple[str, bytes]] = []
+    # 单个 zip → 解压；否则视为文件夹/多文件上传（保留相对路径）
+    if len(files) == 1 and (files[0].filename or "").lower().endswith(".zip"):
+        data = await files[0].read()
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                for member in zf.infolist():
+                    if member.is_dir():
+                        continue
+                    name = member.filename.replace("\\", "/").strip("/")
+                    if not name:
+                        continue
+                    entries.append((name, zf.read(member)))
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="zip 文件损坏或格式不正确")
+    else:
+        for f in files:
+            name = (f.filename or "").replace("\\", "/").strip("/")
+            if not name:
+                continue
+            entries.append((name, await f.read()))
+
+    try:
+        target = skills_mgr.upload_skill(entries, final_owner)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "data": {"skillPath": target}}
 
 
@@ -174,22 +190,8 @@ class CreateTaskBody(BaseModel):
     jql: str
     maxIssues: int = 0
     email: str = ""
-    mode: str = Field(default="immediate", pattern="^(immediate|once|cron)$")
+    mode: str = Field(default="immediate", pattern="^(immediate|once)$")
     runAt: str | None = None   # "YYYY-MM-DD HH:MM"
-    cron: str | None = None    # 5 段 cron
-
-
-def _validate_cron(expr: str) -> None:
-    fields = expr.split()
-    if len(fields) != 5:
-        raise HTTPException(status_code=400, detail="cron 必须是 5 段表达式")
-    # 借用 legacy 的解析做合法性校验
-    try:
-        from run_skills_scheduler import cron_match
-        from datetime import datetime
-        cron_match(expr, datetime.now())
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/backend/tasks")
@@ -213,28 +215,21 @@ def api_create_task(body: CreateTaskBody, caller: Caller = Depends(auth)) -> dic
         run = executor.create_immediate_run(body.model_dump(), caller.username)
         return {"ok": True, "task": run}
 
-    # 定时/cron：写入 yaml 定义
-    trigger = body.mode
-    if trigger == "cron":
-        if not body.cron or not body.cron.strip():
-            raise HTTPException(status_code=400, detail="cron 模式必须提供 cron 表达式")
-        _validate_cron(body.cron.strip())
-    else:
-        if not body.runAt:
-            raise HTTPException(status_code=400, detail="once 模式必须提供 runAt")
-        try:
-            time.strptime(body.runAt, "%Y-%m-%d %H:%M")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="runAt 格式必须为 YYYY-MM-DD HH:MM")
+    # 定时执行：写入 yaml 定义
+    if not body.runAt:
+        raise HTTPException(status_code=400, detail="once 模式必须提供 runAt")
+    try:
+        time.strptime(body.runAt, "%Y-%m-%d %H:%M")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="runAt 格式必须为 YYYY-MM-DD HH:MM")
 
     task_def = {
         "id": storage.gen_id("tsk"),
         "name": name,
         "owner": caller.username,
         "enabled": True,
-        "trigger": trigger,
-        "cron": body.cron.strip() if trigger == "cron" else None,
-        "run_at": body.runAt if trigger == "once" else None,
+        "trigger": "once",
+        "run_at": body.runAt,
         "skill": body.skill,
         "jql": body.jql,
         "email": body.email,
@@ -300,13 +295,11 @@ class CreatePresetBody(BaseModel):
     name: str = ""
     skill: str = ""
     skillPath: str = ""
-    skillType: str = ""
     jql: str
     maxIssues: int = 0
     email: str = ""
-    mode: str = Field(default="immediate", pattern="^(immediate|once|cron)$")
+    mode: str = Field(default="immediate", pattern="^(immediate|once)$")
     runAt: str | None = None
-    cron: str | None = None
 
 
 @app.get("/api/backend/presets")
@@ -323,11 +316,7 @@ def api_create_preset(body: CreatePresetBody, caller: Caller = Depends(auth)) ->
         raise HTTPException(status_code=400, detail="配置名称不能为空")
     if not body.jql.strip():
         raise HTTPException(status_code=400, detail="JQL 不能为空")
-    if body.mode == "cron":
-        if not body.cron or not body.cron.strip():
-            raise HTTPException(status_code=400, detail="cron 模式必须提供 cron 表达式")
-        _validate_cron(body.cron.strip())
-    elif body.mode == "once":
+    if body.mode == "once":
         if not body.runAt:
             raise HTTPException(status_code=400, detail="once 模式必须提供 runAt")
         try:
@@ -341,13 +330,11 @@ def api_create_preset(body: CreatePresetBody, caller: Caller = Depends(auth)) ->
         "owner": caller.username,
         "skill": body.skill,
         "skillPath": body.skillPath,
-        "skillType": body.skillType,
         "jql": body.jql,
         "maxIssues": int(body.maxIssues or 0),
         "email": body.email,
         "mode": body.mode,
         "runAt": body.runAt if body.mode == "once" else None,
-        "cron": body.cron.strip() if body.mode == "cron" else None,
         "createdAt": storage.now_str(),
     }
     storage.add_preset(preset)
@@ -358,6 +345,51 @@ def api_create_preset(body: CreatePresetBody, caller: Caller = Depends(auth)) ->
 def api_delete_preset(preset_id: str, caller: Caller = Depends(auth)) -> dict[str, Any]:
     if not storage.remove_preset(preset_id, caller.username, caller.is_admin):
         raise HTTPException(status_code=404, detail="配置不存在或无权删除")
+    return {"ok": True}
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 计划任务（指定时间执行一次的 once 任务）
+# 普通用户可查看/删除自己创建的、尚未执行的 plan，管理员可查看/删除全部
+# ════════════════════════════════════════════════════════════════════════
+def _to_scheduled(d: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": d.get("id"),
+        "name": d.get("name"),
+        "owner": d.get("owner"),
+        "skill": d.get("skill"),
+        "jql": d.get("jql"),
+        "email": d.get("email"),
+        "maxIssues": d.get("max_issues", 0),
+        "runAt": d.get("run_at"),
+        "createdAt": d.get("created_t"),
+    }
+
+
+@app.get("/api/backend/scheduled-tasks")
+def api_list_scheduled(caller: Caller = Depends(auth)) -> dict[str, Any]:
+    defs = storage.load_task_defs()
+    result = []
+    for d in defs:
+        if d.get("trigger") != "once":
+            continue
+        if not d.get("enabled", True):
+            continue
+        if not caller.is_admin and d.get("owner") != caller.username:
+            continue
+        result.append(_to_scheduled(d))
+    return {"ok": True, "data": result}
+
+
+@app.delete("/api/backend/scheduled-tasks/{task_id}")
+def api_delete_scheduled(task_id: str, caller: Caller = Depends(auth)) -> dict[str, Any]:
+    defs = storage.load_task_defs()
+    target = next((d for d in defs if d.get("id") == task_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="计划任务不存在")
+    if not caller.is_admin and target.get("owner") != caller.username:
+        raise HTTPException(status_code=403, detail="只有创建者或管理员可以删除")
+    storage.remove_task_def(task_id)
     return {"ok": True}
 
 

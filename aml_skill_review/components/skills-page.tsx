@@ -33,17 +33,9 @@ import {
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Table,
   TableBody,
@@ -165,17 +157,14 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
   // ---------- 列表状态 ----------
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [loading, setLoading] = useState(true)
-  const [skillTypes, setSkillTypes] = useState<string[]>([])
 
   // ---------- 上传对话框状态 ----------
   const [showUpload, setShowUpload] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [formType, setFormType] = useState("") // 已有类型下拉选中值
-  const [useCustomType, setUseCustomType] = useState(false) // 是否使用自定义类型
-  const [customType, setCustomType] = useState("") // 自定义类型文本
-  const [formName, setFormName] = useState("") // skill 名称
+  const [uploadMode, setUploadMode] = useState<"zip" | "folder">("zip") // 上传方式：zip 压缩包 / 文件夹
+  const [zipFile, setZipFile] = useState<File | null>(null) // zip 文件
+  const [folderFiles, setFolderFiles] = useState<File[]>([]) // 文件夹内的全部文件
   const [formOwner, setFormOwner] = useState("") // 所有者（管理员可指定）
-  const [formFile, setFormFile] = useState<File | null>(null) // zip 文件
 
   // ---------- 预览面板状态 ----------
   const [previewSkill, setPreviewSkill] = useState<SkillInfo | null>(null)
@@ -217,74 +206,52 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
     }
   }, [router])
 
-  /**
-   * 加载 Skill 类型列表。
-   * 作用：调用 /api/backend/skills/types 获取所有类型组名，
-   * 用于上传对话框的类型下拉和左侧类型展示。
-   */
-  const loadSkillTypes = useCallback(async () => {
-    try {
-      const res = await fetch("/api/backend/skills/types")
-      if (res.status === 401) {
-        router.push("/login")
-        return
-      }
-      const data = await res.json()
-      if (!data.ok) throw new Error(data.error || "获取类型列表失败")
-      setSkillTypes(data.data || [])
-      console.log(`[Skill管理] 获取类型列表成功: ${data.data?.length || 0} 个`)
-    } catch (err) {
-      console.error("[Skill管理] 获取类型列表失败:", err)
-      toast.error("获取类型列表失败", { description: String(err) })
-    }
-  }, [router])
-
   useEffect(() => {
     loadSkills()
-    loadSkillTypes()
-  }, [loadSkills, loadSkillTypes])
+  }, [loadSkills])
 
   /**
    * 上传新 Skill。
-   * 作用：组装 FormData（类型、名称、zip 文件、所有者），
+   * 作用：组装 FormData（zip 压缩包或文件夹 + 所有者），
    * POST 到 /api/backend/skills；成功后关闭对话框、刷新列表。
+   * 文件名取 SKILL.md 的 name 字段，保存到根目录下。
    */
   async function handleUpload() {
-    // 确定最终类型：自定义模式下取文本，否则取下拉值
-    const finalType = useCustomType ? customType.trim() : formType
-    if (!finalType) {
-      toast.error("请选择或输入 Skill 类型")
-      return
+    const formData = new FormData()
+    // 管理员可指定 owner，普通用户不传（服务端自动用自己）
+    if (isAdmin && formOwner.trim()) {
+      formData.append("owner", formOwner.trim())
     }
-    if (!formName.trim()) {
-      toast.error("请输入 Skill 名称")
-      return
+
+    if (uploadMode === "zip") {
+      if (!zipFile) {
+        toast.error("请选择 zip 压缩包")
+        return
+      }
+      formData.append("files", zipFile)
+    } else {
+      if (folderFiles.length === 0) {
+        toast.error("请选择要上传的文件夹")
+        return
+      }
+      // 用相对路径作为文件名，服务端据此还原目录结构
+      for (const f of folderFiles) {
+        formData.append("files", f, f.webkitRelativePath || f.name)
+      }
     }
-    if (!formFile) {
-      toast.error("请选择 zip 文件")
-      return
-    }
+
     setUploading(true)
     try {
-      const formData = new FormData()
-      formData.append("skillType", finalType)
-      formData.append("skillName", formName.trim())
-      formData.append("file", formFile)
-      // 管理员可指定 owner，普通用户不传（服务端自动用自己）
-      if (isAdmin && formOwner.trim()) {
-        formData.append("owner", formOwner.trim())
-      }
       const res = await fetch("/api/backend/skills", { method: "POST", body: formData })
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || "上传失败")
       toast.success("上传成功", {
-        description: `Skill 已保存到 ${data.data?.skillPath || finalType}/${formName.trim()}`,
+        description: `Skill 已保存为「${data.data?.skillPath || "未知"}」`,
       })
       // 重置表单 + 关闭对话框 + 刷新列表
       resetUploadForm()
       setShowUpload(false)
       await loadSkills()
-      await loadSkillTypes()
     } catch (err) {
       console.error("[Skill管理] 上传失败:", err)
       toast.error("上传失败", { description: String(err) })
@@ -295,12 +262,10 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
 
   /** 重置上传表单各字段 */
   function resetUploadForm() {
-    setFormType("")
-    setUseCustomType(false)
-    setCustomType("")
-    setFormName("")
+    setUploadMode("zip")
+    setZipFile(null)
+    setFolderFiles([])
     setFormOwner("")
-    setFormFile(null)
   }
 
   /**
@@ -472,9 +437,21 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
           </div>
         </div>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          管理 Skill 资源：上传 zip 包、预览文件内容、删除、设置所有者。普通用户只能管理自己的 Skill，管理员可管理全部。
+          管理 Skill 资源：上传 zip 压缩包或文件夹、预览文件内容、删除、设置所有者。普通用户只能管理自己的 Skill，管理员可管理全部。
         </p>
       </header>
+
+      {/* ========== 使用说明 ========== */}
+      <div className="mb-6 rounded-xl border border-border bg-muted/40 p-4 text-sm leading-relaxed text-muted-foreground">
+        <p className="mb-2 font-medium text-foreground">使用说明</p>
+        <ul className="list-inside list-disc space-y-1">
+          <li>上传：点击左侧「上传新 Skill」，选择 zip 压缩包或一个文件夹（文件夹需包含 SKILL.md）。系统会读取 SKILL.md 中的 name 字段作为 Skill 名称，并保存到根目录。</li>
+          <li>预览：在列表点击「预览」，左侧为文件树、右侧查看选中的文件内容。</li>
+          <li>删除：点击行尾垃圾桶按钮删除对应 Skill（不可恢复）。</li>
+          <li>设置所有者：管理员可点击「设主」修改 Skill 的所有者。</li>
+          <li>侧边栏：点击 Skill 名称可折叠/展开查看 SKILL.md 的 description。</li>
+        </ul>
+      </div>
 
       <div className="flex flex-col gap-6 lg:flex-row">
         {/* ========== 左侧侧边栏：操作按钮 + 类型列表 + 用户信息 ========== */}
@@ -492,20 +469,28 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
               上传新 Skill
             </Button>
 
-            {/* Skill 类型列表 */}
+            {/* Skill 列表（名称 + description 可折叠） */}
             <div className="mt-4">
               <p className="mb-2 flex items-center gap-2 text-sm font-medium">
                 <FolderTree className="size-4 text-muted-foreground" />
-                Skill 类型
+                Skill 列表
               </p>
-              <div className="flex flex-wrap gap-1.5">
-                {skillTypes.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">暂无类型</p>
+              <div className="space-y-1.5">
+                {skills.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">暂无 Skill</p>
                 ) : (
-                  skillTypes.map((t) => (
-                    <Badge key={t} variant="secondary">
-                      {t}
-                    </Badge>
+                  skills.map((s) => (
+                    <details
+                      key={s.skillPath}
+                      className="group rounded-lg border border-border bg-muted/30 px-2.5 py-1.5"
+                    >
+                      <summary className="cursor-pointer list-none text-sm font-medium hover:text-foreground">
+                        {s.skillName}
+                      </summary>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        {s.description || "-"}
+                      </p>
+                    </details>
                   ))
                 )}
               </div>
@@ -543,7 +528,6 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
               <TableHeader className="sticky top-0 z-10">
                 <TableRow className="bg-muted/90 hover:bg-muted/90 backdrop-blur">
                   <TableHead className="min-w-[180px]">Skill 名称</TableHead>
-                  <TableHead className="w-[140px]">类型</TableHead>
                   <TableHead className="w-[120px]">所有者</TableHead>
                   <TableHead className="min-w-[260px]">描述</TableHead>
                   <TableHead className="w-[80px] text-right">文件数</TableHead>
@@ -553,7 +537,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
               <TableBody>
                 {skills.length === 0 && !loading && (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-16 text-center text-muted-foreground">
+                    <TableCell colSpan={5} className="py-16 text-center text-muted-foreground">
                       暂无 Skill，点击左侧「上传新 Skill」添加
                     </TableCell>
                   </TableRow>
@@ -562,9 +546,6 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
                   <TableRow key={skill.skillPath} className="align-top">
                     <TableCell className="font-mono text-sm font-medium">
                       {skill.skillName}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{skill.skillType}</Badge>
                     </TableCell>
                     <TableCell className="text-sm">
                       {skill.owner || (
@@ -646,55 +627,60 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
               </Button>
             </div>
             <div className="space-y-4">
-              {/* Skill 类型：已有类型下拉 + 自定义输入 */}
+              {/* 上传方式：zip 压缩包 / 文件夹 */}
               <div className="space-y-1.5">
-                <Label>Skill 类型</Label>
-                <Select
-                  value={useCustomType ? "__custom__" : formType}
-                  onValueChange={(v) => {
-                    const val = String(v ?? "")
-                    if (val === "__custom__") {
-                      setUseCustomType(true)
-                    } else {
-                      setUseCustomType(false)
-                      setFormType(val)
-                    }
-                  }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="选择类型或自定义">
-                      {(v: unknown) =>
-                        v === "__custom__" ? "自定义…" : v ? String(v) : ""
-                      }
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {skillTypes.map((t) => (
-                      <SelectItem key={t} value={t}>
-                        {t}
-                      </SelectItem>
-                    ))}
-                    <SelectItem value="__custom__">自定义…</SelectItem>
-                  </SelectContent>
-                </Select>
-                {useCustomType && (
-                  <Input
-                    value={customType}
-                    onChange={(e) => setCustomType(e.target.value)}
-                    placeholder="输入新的类型组名（如 wifi_bt_skills）"
-                  />
-                )}
+                <Label>上传方式</Label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={uploadMode === "zip" ? "default" : "outline"}
+                    onClick={() => setUploadMode("zip")}
+                  >
+                    Zip 压缩包
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={uploadMode === "folder" ? "default" : "outline"}
+                    onClick={() => setUploadMode("folder")}
+                  >
+                    文件夹
+                  </Button>
+                </div>
               </div>
 
-              {/* Skill 名称 */}
-              <div className="space-y-1.5">
-                <Label>Skill 名称</Label>
-                <Input
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  placeholder="例如 wifi-bug-analyzer"
-                />
-              </div>
+              {/* 文件选择：zip 或文件夹 */}
+              {uploadMode === "zip" ? (
+                <div className="space-y-1.5">
+                  <Label>Zip 压缩包</Label>
+                  <Input
+                    type="file"
+                    accept=".zip,application/zip"
+                    onChange={(e) => setZipFile(e.target.files?.[0] || null)}
+                  />
+                  {zipFile && (
+                    <p className="text-xs text-muted-foreground">
+                      已选择：{zipFile.name}（{(zipFile.size / 1024).toFixed(1)} KB）
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label>文件夹（需包含 SKILL.md）</Label>
+                  <Input
+                    type="file"
+                    multiple
+                    {...({ webkitdirectory: "" } as Record<string, string>)}
+                    onChange={(e) => setFolderFiles(Array.from(e.target.files ?? []))}
+                  />
+                  {folderFiles.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      已选择文件夹「{folderFiles[0].webkitRelativePath.split("/")[0] || folderFiles[0].name}」，共 {folderFiles.length} 个文件
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* 所有者（管理员可指定） */}
               {isAdmin && (
@@ -708,20 +694,9 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
                 </div>
               )}
 
-              {/* Zip 文件 */}
-              <div className="space-y-1.5">
-                <Label>Zip 文件</Label>
-                <Input
-                  type="file"
-                  accept=".zip"
-                  onChange={(e) => setFormFile(e.target.files?.[0] || null)}
-                />
-                {formFile && (
-                  <p className="text-xs text-muted-foreground">
-                    已选择：{formFile.name}（{(formFile.size / 1024).toFixed(1)} KB）
-                  </p>
-                )}
-              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                系统会读取 SKILL.md 中的 name 字段作为 Skill 名称，并保存到根目录（重复名称会覆盖）。
+              </p>
 
               {/* 操作按钮 */}
               <div className="flex justify-end gap-2 pt-2">

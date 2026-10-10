@@ -105,13 +105,24 @@ type TaskPreset = {
   owner: string
   skill: string
   skillPath: string
-  skillType: string
   jql: string
   maxIssues: number
   email: string
-  mode: "immediate" | "once" | "cron"
+  mode: "immediate" | "once"
   runAt: string | null
-  cron: string | null
+  createdAt: string
+}
+
+/** 计划任务（指定时间执行一次），尚未执行的 once 任务定义 */
+type ScheduledTask = {
+  id: string
+  name: string
+  owner: string
+  skill: string
+  jql: string
+  email: string
+  maxIssues: number
+  runAt: string
   createdAt: string
 }
 
@@ -149,16 +160,20 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   const [formJql, setFormJql] = useState("")
   const [formMaxIssues, setFormMaxIssues] = useState("50")
   const [formEmail, setFormEmail] = useState("")
-  // 触发方式：immediate=立即执行，once=指定时间执行一次，cron=按 cron 周期执行
-  const [formMode, setFormMode] = useState<"immediate" | "once" | "cron">("immediate")
+  // 触发方式：immediate=立即执行，once=指定时间执行一次
+  const [formMode, setFormMode] = useState<"immediate" | "once">("immediate")
   const [formRunAt, setFormRunAt] = useState("") // datetime-local 控件值
-  const [formCron, setFormCron] = useState("")   // 5 段 cron，如 "0 9 * * 1-5"
   const [creating, setCreating] = useState(false)
 
   // ---------- 任务配置模板（preset） ----------
   const [presets, setPresets] = useState<TaskPreset[]>([])
   const [selectedPresetId, setSelectedPresetId] = useState("")
   const [savingPreset, setSavingPreset] = useState(false)
+
+  // ---------- 计划任务（指定时间执行一次） ----------
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([])
+  const [loadingScheduled, setLoadingScheduled] = useState(true)
+  const [deletingScheduledId, setDeletingScheduledId] = useState("")
 
   // ---------- 日志查看弹窗 ----------
   const [logTask, setLogTask] = useState<TaskInfo | null>(null)
@@ -253,6 +268,29 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   }, [router])
 
   /**
+   * 加载计划任务（指定时间执行一次的 once 任务）。
+   * 作用：调用 /api/backend/scheduled-tasks 获取当前用户尚未执行的计划任务。
+   */
+  const loadScheduled = useCallback(async () => {
+    try {
+      const res = await fetch("/api/backend/scheduled-tasks")
+      if (res.status === 401) {
+        router.push("/login")
+        return
+      }
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "获取计划任务失败")
+      setScheduledTasks(data.data || [])
+      console.log(`[任务页] 获取计划任务成功: ${data.data?.length || 0} 条`)
+    } catch (err) {
+      console.error("[任务页] 获取计划任务失败:", err)
+      toast.error("获取计划任务失败", { description: String(err) })
+    } finally {
+      setLoadingScheduled(false)
+    }
+  }, [router])
+
+  /**
    * 管理员加载最大并发配置。
    * 作用：调用 /api/backend/admin/task-config 获取当前最大并发任务数。
    */
@@ -275,7 +313,8 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
     loadSkills()
     loadAdminConfig()
     loadPresets()
-  }, [loadTasks, loadStats, loadSkills, loadAdminConfig, loadPresets])
+    loadScheduled()
+  }, [loadTasks, loadStats, loadSkills, loadAdminConfig, loadPresets, loadScheduled])
 
   // ---------- 自动刷新：存在 queued / running 任务时每 5 秒轮询 ----------
   const hasActive = tasks.some((t) => t.status === "queued" || t.status === "running")
@@ -339,7 +378,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       toast.error("请输入 JQL 查询语句")
       return
     }
-    // 定时/cron 参数校验
+    // 定时参数校验
     // datetime-local 的值形如 "2026-10-08T18:30"，后端要求 "YYYY-MM-DD HH:MM"
     let runAt: string | null = null
     if (formMode === "once") {
@@ -348,10 +387,6 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
         return
       }
       runAt = formRunAt.replace("T", " ")
-    }
-    if (formMode === "cron" && !formCron.trim()) {
-      toast.error("请输入 5 段 cron 表达式（分 时 日 月 周）")
-      return
     }
     // 从选中的 skillPath 找到对应的 skillName
     const selected = skills.find((s) => s.skillPath === formSkillPath)
@@ -373,7 +408,6 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
           email,
           mode: formMode,
           runAt,
-          cron: formMode === "cron" ? formCron.trim() : null,
         }),
       })
       const data = await res.json()
@@ -382,10 +416,8 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
         toast.success("任务已创建", {
           description: `${name} → ${data.task.status === "running" ? "已开始运行" : "已加入队列"}`,
         })
-      } else if (formMode === "once") {
-        toast.success("定时任务已创建", { description: `${name} → ${runAt} 执行` })
       } else {
-        toast.success("周期任务已创建", { description: `${name} → cron: ${formCron.trim()}` })
+        toast.success("定时任务已创建", { description: `${name} → ${runAt} 执行` })
       }
       // 清空表单并刷新
       setFormName("")
@@ -395,8 +427,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       setFormEmail("")
       setFormMode("immediate")
       setFormRunAt("")
-      setFormCron("")
-      await Promise.all([loadTasks(), loadStats()])
+      await Promise.all([loadTasks(), loadStats(), loadScheduled()])
     } catch (err) {
       console.error("[任务页] 创建任务失败:", err)
       toast.error("创建任务失败", { description: String(err) })
@@ -432,10 +463,6 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       }
       runAt = formRunAt.replace("T", " ")
     }
-    if (formMode === "cron" && !formCron.trim()) {
-      toast.error("请输入 5 段 cron 表达式（分 时 日 月 周）")
-      return
-    }
     const selected = skills.find((s) => s.skillPath === formSkillPath)
     if (!selected) {
       toast.error("所选 skill 无效")
@@ -451,13 +478,11 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
           name,
           skill: selected.skillName,
           skillPath: selected.skillPath,
-          skillType: selected.skillType,
           jql,
           maxIssues: Number.isFinite(maxIssues) ? maxIssues : 0,
           email: formEmail.trim(),
           mode: formMode,
           runAt,
-          cron: formMode === "cron" ? formCron.trim() : null,
         }),
       })
       const data = await res.json()
@@ -492,7 +517,6 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
     setFormMaxIssues(String(p.maxIssues ?? 50))
     setFormEmail(p.email || "")
     setFormMode(p.mode || "immediate")
-    setFormCron(p.mode === "cron" ? (p.cron || "") : "")
     setFormRunAt(p.mode === "once" && p.runAt ? p.runAt.replace(" ", "T") : "")
     // 恢复 skill：仅当该 skill 当前仍存在时才回填
     if (p.skillPath && skills.some((s) => s.skillPath === p.skillPath)) {
@@ -525,6 +549,28 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
     } catch (err) {
       console.error("[任务页] 删除配置失败:", err)
       toast.error("删除配置失败", { description: String(err) })
+    }
+  }
+
+  /**
+   * 删除计划任务（指定时间执行一次、尚未执行的 once 任务）。
+   * 作用：调用 /api/backend/scheduled-tasks/[id]（DELETE）移除计划任务。
+   */
+  async function handleDeleteScheduled(task: ScheduledTask) {
+    setDeletingScheduledId(task.id)
+    try {
+      const res = await fetch(`/api/backend/scheduled-tasks/${encodeURIComponent(task.id)}`, {
+        method: "DELETE",
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "删除计划任务失败")
+      toast.success("计划任务已删除", { description: task.name })
+      await loadScheduled()
+    } catch (err) {
+      console.error("[任务页] 删除计划任务失败:", err)
+      toast.error("删除计划任务失败", { description: String(err) })
+    } finally {
+      setDeletingScheduledId("")
     }
   }
 
@@ -653,6 +699,22 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
         </p>
       </header>
 
+      {/* ========== 使用说明 ========== */}
+      <div className="mb-6 rounded-xl border border-border bg-muted/40 p-4">
+        <p className="text-sm font-medium">使用说明</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-muted-foreground">
+          <li><span className="font-medium text-foreground">顶部统计栏：</span>查看运行中/最大并发、排队总数、你的排队位置。</li>
+          <li><span className="font-medium text-foreground">管理员配置（仅管理员可见）：</span>修改最大并发任务数（1~16），保存后立即尝试调度排队任务。</li>
+          <li>
+            <span className="font-medium text-foreground">新建任务：</span>填写任务名称、选择 Skill（名称取自各 skill.md 的 name 字段）、
+            输入 JQL、最大处理条数与通知邮箱；触发方式支持「立即执行」和「指定时间」。
+          </li>
+          <li><span className="font-medium text-foreground">配置模板：</span>「保存当前配置」把当前表单存为模板，「加载」回填到表单，「删除」移除模板。</li>
+          <li><span className="font-medium text-foreground">计划任务（指定时间）：</span>展示尚未执行的定时任务明细（任务名称、Skill、执行时间、创建时间），可点击「删除」取消该计划。</li>
+          <li><span className="font-medium text-foreground">任务列表：</span>查看状态/进度/队列位置，可用「日志」查看、「下载日志/结果」下载、「停止」终止排队或运行中的任务。</li>
+        </ul>
+      </div>
+
       {/* ========== 顶部统计栏 ========== */}
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="rounded-xl border border-border bg-card p-4">
@@ -726,6 +788,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
             <Select
               value={selectedPresetId}
               onValueChange={(v) => setSelectedPresetId(String(v || ""))}
+              items={presets.map((p) => ({ value: p.id, label: p.name }))}
             >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="选择配置加载到表单" />
@@ -783,7 +846,6 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                 {skills.map((s) => (
                   <SelectItem key={s.skillPath} value={s.skillPath}>
                     {s.skillName}
-                    <span className="text-muted-foreground">（{s.skillType}）</span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -823,14 +885,13 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
             />
           </div>
 
-          {/* 触发方式：立即 / 指定时间 / cron 周期 */}
+          {/* 触发方式：立即 / 指定时间 */}
           <div className="mt-4">
             <Label>触发方式</Label>
             <div className="mt-1.5 flex gap-2">
               {([
                 { v: "immediate", label: "立即执行" },
                 { v: "once", label: "指定时间" },
-                { v: "cron", label: "Cron 周期" },
               ] as const).map((opt) => (
                 <Button
                   key={opt.v}
@@ -858,23 +919,6 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
               />
             </div>
           )}
-
-          {/* Cron 周期执行 */}
-          {formMode === "cron" && (
-            <div className="mt-4">
-              <Label htmlFor="task-cron">Cron 表达式（分 时 日 月 周）</Label>
-              <Input
-                id="task-cron"
-                className="mt-1.5 font-mono"
-                value={formCron}
-                onChange={(e) => setFormCron(e.target.value)}
-                placeholder="0 9 * * 1-5  （工作日每天 9:00）"
-              />
-              <p className="mt-1 text-xs text-muted-foreground">
-                周期任务会写入 process_skills/skills_tasks.yaml，由后端调度器按分钟触发。
-              </p>
-            </div>
-          )}
         </div>
         <div className="mt-4 flex justify-end">
           <Button onClick={handleCreate} disabled={creating}>
@@ -882,6 +926,69 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
             {formMode === "immediate" ? "创建并执行" : "创建计划"}
           </Button>
         </div>
+      </div>
+
+      {/* ========== 计划任务（指定时间） ========== */}
+      <div className="mb-6 rounded-xl border border-border bg-card">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Clock className="size-4 text-muted-foreground" />
+            <p className="text-sm font-medium">计划任务（指定时间）</p>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            共 <span className="font-mono font-medium text-foreground">{scheduledTasks.length}</span> 条
+          </p>
+        </div>
+        {scheduledTasks.length === 0 ? (
+          <p className="py-10 text-center text-sm text-muted-foreground">
+            {loadingScheduled ? "加载中…" : "暂无待执行的计划任务"}
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/90 hover:bg-muted/90">
+                <TableHead className="min-w-[140px]">任务名称</TableHead>
+                <TableHead className="w-[120px]">Skill</TableHead>
+                <TableHead className="w-[180px]">执行时间</TableHead>
+                <TableHead className="w-[160px]">创建时间</TableHead>
+                <TableHead className="w-[100px] text-right">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {scheduledTasks.map((st) => (
+                <TableRow key={st.id} className="align-middle">
+                  <TableCell>
+                    <p className="line-clamp-1 text-sm font-medium">{st.name || "-"}</p>
+                    {isAdmin && st.owner && (
+                      <p className="line-clamp-1 text-xs text-muted-foreground">创建者：{st.owner}</p>
+                    )}
+                    {st.email && (
+                      <p className="line-clamp-1 text-xs text-muted-foreground">{st.email}</p>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-sm">{st.skill || "-"}</TableCell>
+                  <TableCell className="font-mono text-xs text-foreground">{st.runAt || "-"}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{st.createdAt || "-"}</TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => handleDeleteScheduled(st)}
+                      disabled={deletingScheduledId === st.id}
+                    >
+                      {deletingScheduledId === st.id ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="size-3.5" />
+                      )}
+                      删除
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </div>
 
       {/* ========== 任务列表 ========== */}

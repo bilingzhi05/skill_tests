@@ -35,3 +35,14 @@ tasks:
   email: lingzhi.bi@amlogic.com
   max_issues: 1
   created_t: '2026-10-09 11:20:50'
+- id: tsk_1791545129499_03b20f
+  name: irdeto_cas_analysis
+  owner: minhong.yang
+  enabled: false
+  trigger: once
+  run_at: 2026-10-09 19:27
+  skill: nagracas_jira_analysis
+  jql: issuetype = Bug AND status = Closed AND "Root Cause" is not EMPTY AND "How to fix" is not EMPTY AND attachments is not EMPTY AND labels in (FAE-F-M-CAS-Nagra, FAE-A-M-CAS-Nagra) AND assignee in (Minhong.Yang, chao.yin, Chengshun.Wang) order by updated DESC
+  email: lingzhi.bi@amlogic.com
+  max_issues: 1
+  created_t: '2026-10-09 19:25:29'
