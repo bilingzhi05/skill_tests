@@ -3,7 +3,7 @@
 全局配置（路径 / 端口 / 内部 Token）。
 
 所有路径相对 process_skills/ 推导；可用环境变量覆盖：
-    SKILL_API_PORT       FastAPI 监听端口（默认 1238）
+    SKILL_API_PORT       FastAPI 监听端口（默认 12371）
     SKILL_API_TOKEN      Next.js 代理与本服务之间的共享密钥
     SKILL_DIR_ROOT       skill 根目录（默认 AmlAgent/expert-skills/log_analyse_skills）
     JIRA_BOT_USERNAME 等 由 run_jql_with_skill_demo.py 的子进程继承
@@ -51,7 +51,7 @@ DEFAULT_MAX_CONCURRENT = 2
 
 # FastAPI 监听地址：只绑定本机，浏览器不直接访问
 HOST = os.environ.get("SKILL_API_HOST", "127.0.0.1")
-PORT = int(os.environ.get("SKILL_API_PORT", "1238"))
+PORT = int(os.environ.get("SKILL_API_PORT", "12371"))
 
 
 def load_env_file() -> None:

@@ -112,7 +112,7 @@ export const RUBICK_ROOT = path.resolve(
 
 /** FastAPI 后端地址（只绑定本机） */
 export const SKILL_API_BASE =
-  process.env.SKILL_API_BASE || "http://127.0.0.1:1238"
+  process.env.SKILL_API_BASE || "http://127.0.0.1:12371"
 
 /** 后端内部 Token 文件（后端启动时自动生成） */
 const SKILL_API_TOKEN_FILE = path.resolve(

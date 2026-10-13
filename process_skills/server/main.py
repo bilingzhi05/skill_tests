@@ -5,7 +5,7 @@ Skill 任务后端 —— FastAPI 应用。
 启动::
 
     cd process_skills
-    python -m uvicorn server.main:app --host 127.0.0.1 --port 1238
+    python -m uvicorn server.main:app --host 127.0.0.1 --port 12371
 
 鉴权：仅接受 Next.js 代理转发来的请求：
     X-INTERNAL-TOKEN : 共享密钥（env SKILL_API_TOKEN 或 server_data/.api_token）

@@ -5,4 +5,4 @@ REM 用法：双击或在终端执行本 bat
 REM 前置：set JIRA_BOT_USERNAME / JIRA_BOT_PASSWORD（子进程会继承）
 REM ============================================================
 cd /d "%~dp0"
-python -m uvicorn server.main:app --host 127.0.0.1 --port 1238
+python -m uvicorn server.main:app --host 127.0.0.1 --port 12371

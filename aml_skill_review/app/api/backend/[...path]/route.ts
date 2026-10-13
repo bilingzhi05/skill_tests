@@ -1,5 +1,5 @@
 // ============================================================
-// 统一后端代理：/api/backend/* → FastAPI (127.0.0.1:1238)/api/backend/*
+// 统一后端代理：/api/backend/* → FastAPI (127.0.0.1:12371)/api/backend/*
 //
 // 浏览器只访问 Next.js（沿用现有 Cookie 登录），本路由负责：
 //   1. 校验登录，取出 username / is_admin；
@@ -53,7 +53,7 @@ async function proxy(request: Request, segments: string[]): Promise<Response> {
     res = await fetch(target, init)
   } catch {
     return errorResponse(
-      "任务后端不可用，请先启动 FastAPI 服务（process_skills/start_backend_server.bat，端口 1238）",
+      "任务后端不可用，请先启动 FastAPI 服务（process_skills/start_backend_server.bat，端口 12371）",
       502,
     )
   }

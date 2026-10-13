@@ -2,7 +2,7 @@
 # ============================================================
 # 一键启动 Skill 评审系统（Linux / macOS）
 #   Next.js 前端 : http://127.0.0.1:1237
-#   FastAPI 后端 : http://127.0.0.1:1238
+#   FastAPI 后端 : http://127.0.0.1:12371
 # 用法：
 #   chmod +x start_all.sh
 #   ./start_all.sh
@@ -32,7 +32,7 @@ done
 
 echo "============================================================"
 echo "  一键启动 Skill 评审系统"
-echo "    后端: http://127.0.0.1:1238"
+echo "    后端: http://127.0.0.1:12371"
 echo "    前端: http://127.0.0.1:1237"
 echo "    解释器: $PY"
 echo "============================================================"
@@ -55,10 +55,10 @@ else
 fi
 echo
 
-echo "[1/3] 启动 FastAPI 后端 (端口 1238) ..."
+echo "[1/3] 启动 FastAPI 后端 (端口 12371) ..."
 (
   cd process_skills
-  nohup "$PY" -m uvicorn server.main:app --host 127.0.0.1 --port 1238 \
+  nohup "$PY" -m uvicorn server.main:app --host 127.0.0.1 --port 12371 \
     > "$LOG_DIR/backend.log" 2>&1 &
   echo $! > "$LOG_DIR/backend.pid"
 )
