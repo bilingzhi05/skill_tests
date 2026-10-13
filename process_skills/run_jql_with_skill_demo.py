@@ -248,10 +248,14 @@ def _load_or_create_workbook(output_path: str, headers: list[str]):
                 if val is not None:
                     existing.add(str(val).strip())
             logger.info("载入已有 %s，已有 %d 条记录", output_path, len(existing))
-            # 同步表头：兼容老文件新增列（如 SKILL定位Owner 等三列）
+            # 同步表头：兼容老文件新增列（如 SKILL定位Owner 等三列）；
+            # 若本次 headers 短于旧文件表头（如之前 display 运行遗留的列），则清空多余列头
             for col_idx, h in enumerate(headers, 1):
                 if ws.cell(row=1, column=col_idx).value != h:
                     ws.cell(row=1, column=col_idx, value=h)
+            for col_idx in range(len(headers) + 1, ws.max_column + 1):
+                if ws.cell(row=1, column=col_idx).value is not None:
+                    ws.cell(row=1, column=col_idx).value = None
             return wb, ws, existing, max_row + 1
         except Exception as e:
             logger.warning("读取 %s 失败 (%s)，将新建文件", output_path, e)
@@ -510,11 +514,14 @@ async def main():
     # ── 逐条处理 ──
     from openpyxl.styles import Alignment
 
+    # 仅当 skill 涉及 display（如 aml-display-debug）才写入 display 特有列
+    is_display_skill = bool(args.skill) and "display" in args.skill.lower()
     headers = [
         "Jira ID", "Summary", "Description", "Root Cause", "How to Fix", "Raw", "Final",
         "Judge Verdict", "Judge Reason", "Judge Aligned", "Judge Conflict", "Judge Real Result",
-        "SKILL定位Owner", "JIRA Component", "JIRA Assignee Owner",
     ]
+    if is_display_skill:
+        headers += ["SKILL定位Owner", "JIRA Component", "JIRA Assignee Owner"]
     wb, ws, processed_ids, row_idx = _load_or_create_workbook(args.output, headers)
 
     total = len(raw)
@@ -643,11 +650,14 @@ async def main():
         row_data = [
             key, summary, description, root_cause, how_to_fix, raw_output, final,
             judge_verdict, judge_reason, judge_aligned, judge_conflict, judge_real,
-            # display skill 特有：SKILL 定位 Owner（大模型判定 Skill Raw 归属模块）、Jira 字段 Owner
-            _classify_skill_owner(raw_output),
-            _get_issue_component_names(issue),
-            _get_issue_assignee(issue),
         ]
+        if is_display_skill:
+            # display skill 特有：SKILL 定位 Owner（大模型判定 Skill Raw 归属模块）、Jira 字段 Owner
+            row_data += [
+                _classify_skill_owner(raw_output),
+                _get_issue_component_names(issue),
+                _get_issue_assignee(issue),
+            ]
         for col_idx, val in enumerate(row_data, 1):
             cell = ws.cell(row=row_idx, column=col_idx, value=clean_excel(val))
             cell.alignment = Alignment(wrap_text=True, vertical="top")

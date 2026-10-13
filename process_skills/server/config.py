@@ -39,6 +39,9 @@ TASKS_YAML = HERE / "skills_tasks.yaml"   # 任务定义（人可编辑）
 STATE_JSON = DATA_DIR / "task_state.json"  # 运行态
 OWNERS_JSON = DATA_DIR / "skill_owners.json"  # skill → owner 映射
 PRESETS_JSON = DATA_DIR / "task_presets.json"  # 任务配置模板（preset）
+REVIEWS_JSON = DATA_DIR / "skill_reviews.json"  # skill 上传审核记录（待审核）
+REVIEW_STAGE_DIR = DATA_DIR / "review_stage"    # skill 上传审核暂存目录（审核通过才放入正式目录）
+NOTICES_JSON = DATA_DIR / "skill_notices.json"  # 审核结果通知（未读，用户点击取消后移除）
 TOKEN_FILE = DATA_DIR / ".api_token"
 
 # 前端评审系统的 user_data 根目录（成功后复制结果用）

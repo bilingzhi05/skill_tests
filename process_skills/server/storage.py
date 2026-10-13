@@ -4,8 +4,8 @@
 
 三件数据：
 1. skills_tasks.yaml  —— 任务「定义」（cron 周期 / run_at 一次性），
-   人可直接编辑；格式与原 run_skills_scheduler.py 兼容（cron/skill/jql/
-   email/max_issues），新增 id/owner/enabled/trigger/run_at/created_t 字段。
+   人可直接编辑（cron/skill/jql/email/max_issues），另有
+   id/owner/enabled/trigger/run_at/created_t 字段。
 2. task_state.json    —— 运行态（每次执行 run 的状态、进度、pid、日志路径）
    + 全局配置 max_concurrent_tasks + 每个 cron 任务的上次触发分钟。
 3. skill_owners.json  —— skill 相对路径 → owner 的映射。
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -32,6 +33,8 @@ _state_lock = threading.RLock()
 _yaml_lock = threading.RLock()
 _owners_lock = threading.RLock()
 _presets_lock = threading.RLock()
+_reviews_lock = threading.RLock()
+_notices_lock = threading.RLock()
 
 
 def now_str() -> str:
@@ -40,6 +43,19 @@ def now_str() -> str:
 
 def gen_id(prefix: str) -> str:
     return f"{prefix}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+
+
+def slug(value: str, fallback: str = "default", max_len: int = 40) -> str:
+    """把任意字符串清理成安全的文件/ID 片段：仅保留字母数字与 ._-。"""
+    s = re.sub(r"[^A-Za-z0-9._-]", "_", str(value)).strip("._-")
+    s = re.sub(r"_{2,}", "_", s)
+    return s[:max_len] or fallback
+
+
+def gen_task_id(skill: str = "") -> str:
+    """生成可读任务 ID：task_YYYYMMDD_HHMMSS_mmm_skillname（毫秒级防同秒冲突）。"""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    return f"task_{ts}_{slug(skill)}"
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -79,8 +95,8 @@ def save_task_defs(defs: list[dict[str, Any]]) -> None:
             "#   email      : 收件人邮箱（逗号分隔，结果会复制到 user_data/<用户名>/）\n"
             "#   max_issues : 最多送 AI 分析条数（0=不限）\n"
             "#   created_t  : 创建时间\n"
-            "# 注意：本服务运行时请停用原 crontab 中的 run_skills_scheduler.py，\n"
-            "#       避免 cron 任务被双重触发。\n"
+            "# 注意：定时触发由后端内置调度线程完成（server/executor.py），\n"
+            "#       无需 crontab。\n"
             "# ============================================================\n"
         )
         tmp = config.TASKS_YAML.with_suffix(".yaml.tmp")
@@ -242,3 +258,57 @@ def remove_preset(preset_id: str, owner: str, is_admin: bool) -> bool:
             return False
         save_presets(new_presets)
     return True
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Skill 上传审核（json）
+# ════════════════════════════════════════════════════════════════════════
+def load_reviews() -> list[dict[str, Any]]:
+    """读取全部 skill 上传审核记录（待审核）。文件缺失/损坏时返回 []。"""
+    if not config.REVIEWS_JSON.exists():
+        return []
+    try:
+        with open(config.REVIEWS_JSON, encoding="utf-8") as f:
+            data = json.load(f)
+        reviews = (data or {}).get("reviews") or []
+        return [r for r in reviews if isinstance(r, dict)]
+    except Exception as e:
+        print(f"[storage] 读取 {config.REVIEWS_JSON.name} 失败: {e}", flush=True)
+        return []
+
+
+def save_reviews(reviews: list[dict[str, Any]]) -> None:
+    """整表写回 skill 上传审核记录（原子写）。"""
+    with _reviews_lock:
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = config.REVIEWS_JSON.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"reviews": reviews}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, config.REVIEWS_JSON)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 审核结果通知（json）
+# ════════════════════════════════════════════════════════════════════════
+def load_notices() -> list[dict[str, Any]]:
+    """读取全部审核结果通知。文件缺失/损坏时返回 []。"""
+    if not config.NOTICES_JSON.exists():
+        return []
+    try:
+        with open(config.NOTICES_JSON, encoding="utf-8") as f:
+            data = json.load(f)
+        notices = (data or {}).get("notices") or []
+        return [n for n in notices if isinstance(n, dict)]
+    except Exception as e:
+        print(f"[storage] 读取 {config.NOTICES_JSON.name} 失败: {e}", flush=True)
+        return []
+
+
+def save_notices(notices: list[dict[str, Any]]) -> None:
+    """整表写回审核结果通知（原子写）。"""
+    with _notices_lock:
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = config.NOTICES_JSON.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"notices": notices}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, config.NOTICES_JSON)

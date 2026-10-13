@@ -147,23 +147,17 @@ def _to_camel(skill_path: str) -> dict[str, Any]:
 
 
 def list_skills(viewer: str, is_admin: bool) -> list[dict[str, Any]]:
-    skills = []
-    for sp in scan_skill_dirs():
-        info = _to_camel(sp)
-        if not is_admin and info["owner"] != viewer:
-            continue
-        skills.append(info)
-    return skills
+    # 所有用户都可见全部 Skill（便于在上传前检查已有 description 触发条件）
+    _ = viewer, is_admin
+    return [_to_camel(sp) for sp in scan_skill_dirs()]
 
 
 def get_skill_detail(skill_path: str, viewer: str, is_admin: bool) -> dict[str, Any] | None:
     full = config.SKILL_DIR_ROOT / skill_path
     if not full.exists():
         return None
-    info = _to_camel(skill_path)
-    if not is_admin and info["owner"] != viewer:
-        return None
-    return info
+    _ = viewer, is_admin
+    return _to_camel(skill_path)
 
 
 def set_skill_owner(skill_path: str, owner: str) -> bool:
@@ -216,14 +210,8 @@ def _common_top(rel_paths: list[str]) -> str:
     return first if all(len(p) > 0 and p[0] == first for p in split) else ""
 
 
-def upload_skill(entries: list[tuple[str, bytes]], owner: str) -> str:
-    """上传 skill 到 SKILL_DIR_ROOT/<name>，目录名取自 SKILL.md 的 name 字段。
-
-    entries 为 [(相对路径, 数据), ...]，来自 zip 解压或文件夹上传。
-    若有 SKILL.md 则用其 name 字段命名；否则回退公共顶层目录名。
-    已存在同名目录时整体替换，并登记 owner。
-    """
-    # 1) 归一化与过滤（丢弃目录项、__pycache__、点开头、路径穿越）
+def _normalize_entries(entries: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
+    """归一化与过滤上传条目（丢弃目录项、__pycache__、点开头、路径穿越）。"""
     normalized: list[tuple[str, bytes]] = []
     for rel, data in entries:
         p = rel.replace("\\", "/").strip("/")
@@ -233,10 +221,13 @@ def upload_skill(entries: list[tuple[str, bytes]], owner: str) -> str:
         if ".." in parts or any(x == "__pycache__" or x.startswith(".") for x in parts):
             continue
         normalized.append(("/".join(parts), data))
-    if not normalized:
-        raise ValueError("上传内容为空")
+    return normalized
 
-    # 2) 定位 SKILL.md（取层级最浅的那个），提取 name 与根前缀
+
+def _resolve_target(normalized: list[tuple[str, bytes]]) -> tuple[str, str]:
+    """返回 (skill_name, skill_root_prefix)：目录名取自 SKILL.md 的 name 字段，
+    无 SKILL.md 时回退公共顶层目录名；skill_root_prefix 用于剥离公共前缀。"""
+    # 定位 SKILL.md（取层级最浅的那个），提取 name 与根前缀
     md_rels = sorted(
         (rel for rel, _ in normalized if rel.rsplit("/", 1)[-1].upper() == "SKILL.MD"),
         key=lambda r: r.count("/"),
@@ -251,19 +242,18 @@ def upload_skill(entries: list[tuple[str, bytes]], owner: str) -> str:
         skill_name = _parse_frontmatter(md_data.decode("utf-8", errors="ignore")).get("name", "")
     skill_name = _sanitize_name(skill_name)
 
-    # 3) 无 SKILL.md 时回退公共顶层目录名（作为根前缀）
+    # 无 SKILL.md 时回退公共顶层目录名（作为根前缀）
     if not skill_root_prefix:
         common = _common_top([rel for rel, _ in normalized])
         if common:
             skill_root_prefix = common + "/"
+    return skill_name, skill_root_prefix
 
-    # 4) 写入目标目录（同名先整体替换）
-    target_full = config.SKILL_DIR_ROOT / skill_name
-    if target_full.exists():
-        shutil.rmtree(target_full, ignore_errors=True)
+
+def _write_entries(target_full: Path, skill_root_prefix: str, normalized: list[tuple[str, bytes]]) -> None:
+    """把归一化后的条目写入目标目录（剥离公共前缀，带路径穿越防护）。"""
     target_full.mkdir(parents=True, exist_ok=True)
     base = str(target_full.resolve())
-
     for rel, data in normalized:
         stripped = rel[len(skill_root_prefix):] if rel.startswith(skill_root_prefix) else rel
         stripped = stripped.strip("/")
@@ -278,8 +268,225 @@ def upload_skill(entries: list[tuple[str, bytes]], owner: str) -> str:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
 
-    set_skill_owner(skill_name, owner)
+
+def submit_upload(entries: list[tuple[str, bytes]], owner: str, confirm: bool = False) -> dict[str, Any]:
+    """提交 skill 上传审核。
+
+    上传内容先暂存到 review_stage/<id>，不直接写入正式目录：
+      - 若 SKILL_DIR_ROOT 已存在同名目录（exists=True），审核通过后将整体覆盖；
+      - 若不存在（exists=False），审核通过后才放入。
+    存在同名 skill 且未二次确认（confirm=False）时，不暂存内容，
+    提前返回 {"exists": True, "need_confirm": True, "skill_name"}，由前端二次确认后重传。
+    返回 {"id", "skill_name", "exists"}。
+    """
+    normalized = _normalize_entries(entries)
+    if not normalized:
+        raise ValueError("上传内容为空")
+
+    skill_name, skill_root_prefix = _resolve_target(normalized)
+    exists = (config.SKILL_DIR_ROOT / skill_name).exists()
+
+    # 存在同名 skill 时，需用户二次确认（确认后带 confirm=True 重新提交）
+    if exists and not confirm:
+        return {
+            "skill_name": skill_name,
+            "exists": True,
+            "need_confirm": True,
+        }
+
+    # 已有同名待审核记录时，拒绝重复提交，避免覆盖语义混乱
+    for rec in storage.load_reviews():
+        if rec.get("skill_name") == skill_name:
+            raise ValueError(f"「{skill_name}」已有上传正在审核中，请等待审核完成后再操作")
+
+    review_id = storage.gen_id("rev")
+    stage_dir = config.REVIEW_STAGE_DIR / review_id
+    _write_entries(stage_dir, skill_root_prefix, normalized)
+
+    reviews = storage.load_reviews()
+    reviews.append(
+        {
+            "id": review_id,
+            "skill_name": skill_name,
+            "exists": exists,
+            "owner": owner,
+            "uploaded_at": storage.now_str(),
+        }
+    )
+    storage.save_reviews(reviews)
+    return {"id": review_id, "skill_name": skill_name, "exists": exists}
+
+
+def list_pending_uploads(viewer: str, is_admin: bool) -> list[dict[str, Any]]:
+    """待审核列表：管理员看全部，普通用户只看自己提交的。"""
+    reviews = storage.load_reviews()
+    result = []
+    for rec in reviews:
+        if not is_admin and rec.get("owner") != viewer:
+            continue
+        result.append(
+            {
+                "id": rec.get("id", ""),
+                "skillName": rec.get("skill_name", ""),
+                "exists": bool(rec.get("exists")),
+                "owner": rec.get("owner", ""),
+                "uploadedAt": rec.get("uploaded_at", ""),
+            }
+        )
+    return result
+
+
+def _find_review(review_id: str) -> dict[str, Any] | None:
+    """按 id 查找待审核记录（不存在返回 None）。"""
+    return next((r for r in storage.load_reviews() if r.get("id") == review_id), None)
+
+
+def _can_view_review(rec: dict[str, Any] | None, user: str, is_admin: bool) -> bool:
+    """审核记录可见性：记录须存在，且查看者为管理员或该记录的上传 owner。"""
+    return rec is not None and (is_admin or rec.get("owner") == user)
+
+
+def can_view_review(review_id: str, user: str, is_admin: bool) -> bool:
+    """公开判断：审核记录是否存在且当前用户（owner/管理员）可访问。"""
+    return _can_view_review(_find_review(review_id), user, is_admin)
+
+
+def approve_upload(review_id: str) -> str:
+    """审核通过：把暂存内容放入正式目录（同名先整体覆盖），并登记 owner。"""
+    rec = _find_review(review_id)
+    if rec is None:
+        raise KeyError(review_id)
+    skill_name = rec.get("skill_name", "")
+    stage_dir = config.REVIEW_STAGE_DIR / review_id
+
+    if stage_dir.is_dir():
+        target_full = config.SKILL_DIR_ROOT / skill_name
+        if target_full.exists():
+            shutil.rmtree(target_full, ignore_errors=True)
+        shutil.copytree(stage_dir, target_full)
+        shutil.rmtree(stage_dir, ignore_errors=True)
+
+    set_skill_owner(skill_name, rec.get("owner", ""))
+    reviews = [r for r in storage.load_reviews() if r.get("id") != review_id]
+    storage.save_reviews(reviews)
+    add_notice(
+        rec.get("owner", ""),
+        "approved",
+        skill_name,
+        f"你上传的 Skill「{skill_name}」已通过管理员审核，现已生效可用。",
+    )
     return skill_name
+
+
+def reject_upload(review_id: str) -> None:
+    """审核拒绝：丢弃暂存内容，移除审核记录，并通知上传者。"""
+    rec = _find_review(review_id)
+    if rec is None:
+        raise KeyError(review_id)
+    skill_name = rec.get("skill_name", "")
+    shutil.rmtree(config.REVIEW_STAGE_DIR / review_id, ignore_errors=True)
+    reviews = [r for r in storage.load_reviews() if r.get("id") != review_id]
+    storage.save_reviews(reviews)
+    add_notice(
+        rec.get("owner", ""),
+        "rejected",
+        skill_name,
+        f"你上传的 Skill「{skill_name}」未通过管理员审核，上传内容已被丢弃。",
+    )
+
+
+def withdraw_upload(review_id: str, user: str, is_admin: bool) -> bool:
+    """审核通过前，上传者（或管理员）可撤销本次上传：丢弃暂存内容并移除记录。"""
+    rec = _find_review(review_id)
+    if not _can_view_review(rec, user, is_admin):
+        return False
+    assert rec is not None
+    shutil.rmtree(config.REVIEW_STAGE_DIR / review_id, ignore_errors=True)
+    reviews = [r for r in storage.load_reviews() if r.get("id") != review_id]
+    storage.save_reviews(reviews)
+    return True
+
+
+def list_review_files(review_id: str, user: str, is_admin: bool) -> list[dict[str, Any]]:
+    """待审核 skill 的暂存文件树（仅 owner 或管理员可见）。"""
+    rec = _find_review(review_id)
+    if not _can_view_review(rec, user, is_admin):
+        return []
+    stage_dir = config.REVIEW_STAGE_DIR / review_id
+    result = []
+    if not stage_dir.is_dir():
+        return result
+    for root, dirs, files in os.walk(stage_dir):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__" and not d.startswith("."))
+        for fn in sorted(files):
+            if fn.startswith("."):
+                continue
+            p = Path(root) / fn
+            rel = p.relative_to(stage_dir).as_posix()
+            result.append({"path": rel, "name": fn, "size": p.stat().st_size})
+    return result
+
+
+def read_review_file(review_id: str, file_rel: str, user: str, is_admin: bool) -> str | None:
+    """读取待审核 skill 的暂存文件内容（仅 owner 或管理员可见，带路径穿越防护）。"""
+    rec = _find_review(review_id)
+    if not _can_view_review(rec, user, is_admin):
+        return None
+    stage_dir = (config.REVIEW_STAGE_DIR / review_id).resolve()
+    target = (stage_dir / file_rel).resolve()
+    if not target.is_relative_to(stage_dir):
+        return None
+    if not target.is_file():
+        return None
+    try:
+        return target.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+def add_notice(user: str, kind: str, skill_name: str, message: str) -> dict[str, Any]:
+    """给指定用户新增一条审核结果通知（same-user 并存保留）。"""
+    notice = {
+        "id": storage.gen_id("nt"),
+        "user": user,
+        "kind": kind,          # approved | rejected
+        "skill_name": skill_name,
+        "message": message,
+        "created_at": storage.now_str(),
+    }
+    notices = storage.load_notices()
+    notices.append(notice)
+    storage.save_notices(notices)
+    return notice
+
+
+def list_notices(user: str) -> list[dict[str, Any]]:
+    """返回某用户的全部未读审核通知（倒序：新的在前）。"""
+    mine = [
+        {
+            "id": n.get("id", ""),
+            "kind": n.get("kind", ""),
+            "skillName": n.get("skill_name", ""),
+            "message": n.get("message", ""),
+            "createdAt": n.get("created_at", ""),
+        }
+        for n in storage.load_notices()
+        if n.get("user") == user
+    ]
+    mine.sort(key=lambda n: n.get("createdAt", ""), reverse=True)
+    return mine
+
+
+def dismiss_notice(notice_id: str, user: str) -> bool:
+    """用户取消（读过）某条通知：永久移除，之后不再发送。"""
+    notices = storage.load_notices()
+    new_notices = [
+        n for n in notices if not (n.get("id") == notice_id and n.get("user") == user)
+    ]
+    if len(new_notices) == len(notices):
+        return False
+    storage.save_notices(new_notices)
+    return True
 
 
 def list_skill_files(skill_path: str) -> list[dict[str, Any]]:

@@ -20,7 +20,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -99,12 +99,10 @@ def api_skill_detail(path: str, caller: Caller = Depends(auth)) -> dict[str, Any
 
 
 @app.delete("/api/backend/skills/delete")
-def api_skill_delete(path: str, caller: Caller = Depends(auth)) -> dict[str, Any]:
-    detail = skills_mgr.get_skill_detail(path, caller.username, caller.is_admin)
-    if not detail:
+def api_skill_delete(path: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+    # 仅管理员可删除 Skill（普通用户只保留上传能力）
+    if not skills_mgr.get_skill_detail(path, caller.username, caller.is_admin):
         raise HTTPException(status_code=404, detail="未找到 skill 或无权访问")
-    if not caller.is_admin and detail["owner"] != caller.username:
-        raise HTTPException(status_code=403, detail="只有 owner 或管理员可以删除")
     skills_mgr.delete_skill(path)
     return {"ok": True}
 
@@ -141,6 +139,7 @@ def api_skill_content(path: str, file: str, caller: Caller = Depends(auth)) -> d
 @app.post("/api/backend/skills")
 async def api_upload_skill(
     owner: str = Form(default=""),
+    confirm_duplicate: str = Form(default=""),
     files: list[UploadFile] = File(...),
     caller: Caller = Depends(auth),
 ) -> dict[str, Any]:
@@ -175,10 +174,91 @@ async def api_upload_skill(
             entries.append((name, await f.read()))
 
     try:
-        target = skills_mgr.upload_skill(entries, final_owner)
+        result = skills_mgr.submit_upload(
+            entries, final_owner, confirm=(confirm_duplicate.strip() == "1")
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"ok": True, "data": {"skillPath": target}}
+    if result.get("need_confirm"):
+        # 存在同名 Skill：要求前端二次确认后带 confirm_duplicate=1 重传
+        raise HTTPException(status_code=409, detail=f"已存在同名 Skill「{result['skill_name']}」，确认后将审核通过覆盖原 Skill")
+    return {
+        "ok": True,
+        "data": {
+            "skillPath": result["skill_name"],
+            "exists": result["exists"],
+            "status": "pending",
+            "reviewId": result["id"],
+        },
+    }
+
+
+# ---- Skill 上传审核（管理员通过/拒绝，普通用户查看自己的待审核项） ----
+@app.get("/api/backend/skills/reviews")
+def api_list_reviews(caller: Caller = Depends(auth)) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "data": skills_mgr.list_pending_uploads(caller.username, caller.is_admin),
+    }
+
+
+@app.post("/api/backend/skills/reviews/{review_id}/approve")
+def api_approve_review(review_id: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+    try:
+        skill_name = skills_mgr.approve_upload(review_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="审核记录不存在")
+    return {"ok": True, "data": {"skillPath": skill_name}}
+
+
+@app.post("/api/backend/skills/reviews/{review_id}/reject")
+def api_reject_review(review_id: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+    try:
+        skills_mgr.reject_upload(review_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="审核记录不存在")
+    return {"ok": True}
+
+
+@app.post("/api/backend/skills/reviews/{review_id}/withdraw")
+def api_withdraw_review(review_id: str, caller: Caller = Depends(auth)) -> dict[str, Any]:
+    """审核通过前撤销上传：仅该上传的 owner 或管理员可操作。"""
+    if not skills_mgr.withdraw_upload(review_id, caller.username, caller.is_admin):
+        raise HTTPException(status_code=404, detail="审核记录不存在或无权撤销")
+    return {"ok": True}
+
+
+@app.get("/api/backend/skills/reviews/{review_id}/files")
+def api_review_files(review_id: str, caller: Caller = Depends(auth)) -> dict[str, Any]:
+    """待审核 skill 的文件树（仅 owner 或管理员可见）。"""
+    if not skills_mgr.can_view_review(review_id, caller.username, caller.is_admin):
+        raise HTTPException(status_code=404, detail="审核记录不存在或无权访问")
+    return {"ok": True, "data": skills_mgr.list_review_files(review_id, caller.username, caller.is_admin)}
+
+
+@app.get("/api/backend/skills/reviews/{review_id}/content")
+def api_review_content(
+    review_id: str, file: str, caller: Caller = Depends(auth)
+) -> dict[str, Any]:
+    """读取待审核 skill 的某个文件内容（仅 owner 或管理员可见）。"""
+    content = skills_mgr.read_review_file(review_id, file, caller.username, caller.is_admin)
+    if content is None:
+        raise HTTPException(status_code=404, detail="审核记录不存在、无权访问或文件不存在")
+    return {"ok": True, "data": content}
+
+
+@app.get("/api/backend/skills/notices")
+def api_list_notices(caller: Caller = Depends(auth)) -> dict[str, Any]:
+    """当前用户的审核结果通知（未读）。"""
+    return {"ok": True, "data": skills_mgr.list_notices(caller.username)}
+
+
+@app.post("/api/backend/skills/notices/{notice_id}/dismiss")
+def api_dismiss_notice(notice_id: str, caller: Caller = Depends(auth)) -> dict[str, Any]:
+    """用户取消（读过）通知：永久移除，之后不再发送。"""
+    if not skills_mgr.dismiss_notice(notice_id, caller.username):
+        raise HTTPException(status_code=404, detail="通知不存在")
+    return {"ok": True}
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -195,8 +275,35 @@ class CreateTaskBody(BaseModel):
 
 
 @app.get("/api/backend/tasks")
-def api_list_tasks(caller: Caller = Depends(auth)) -> dict[str, Any]:
-    return {"ok": True, "tasks": executor.list_runs(caller.username, caller.is_admin)}
+def api_list_tasks(
+    caller: Caller = Depends(auth),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    owner: str = Query(""),
+    skill: str = Query(""),
+    date_from: str = Query(""),
+    date_to: str = Query(""),
+) -> dict[str, Any]:
+    """任务列表：分页 + 按 上传者(仅管理员有意义)/skill/日期范围 过滤。"""
+    result = executor.list_runs(
+        caller.username,
+        caller.is_admin,
+        page=page,
+        page_size=page_size,
+        owner_filter=owner,
+        skill_filter=skill,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return {
+        "ok": True,
+        "tasks": result["items"],
+        "total": result["total"],
+        "page": result["page"],
+        "page_size": result["page_size"],
+        "owner_options": result["owner_options"],
+        "skill_options": result["skill_options"],
+    }
 
 
 @app.get("/api/backend/tasks/stats")
@@ -224,7 +331,7 @@ def api_create_task(body: CreateTaskBody, caller: Caller = Depends(auth)) -> dic
         raise HTTPException(status_code=400, detail="runAt 格式必须为 YYYY-MM-DD HH:MM")
 
     task_def = {
-        "id": storage.gen_id("tsk"),
+        "id": storage.gen_task_id(body.skill),
         "name": name,
         "owner": caller.username,
         "enabled": True,

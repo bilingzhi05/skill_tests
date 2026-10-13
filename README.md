@@ -29,11 +29,15 @@ Jira ─ JQL ─▶ run_jql_with_skill_demo.py ──(AI Skill 分析)──▶ 
 
 在 `aml_skill_review` 中新增了 Skill 管理页面（`/skills`），支持：
 
-- **预览 Skill**：查看 skill 目录文件树和文件内容（SKILL.md 等）
-- **上传/替换 Skill**：上传 zip 包，同类型的 skill 只保留一个（替换式更新）
-- **删除 Skill**：从磁盘和数据库中删除
-- **Owner 权限**：每个 skill 有一个 owner，普通用户只能看到自己的 skill
-- **管理员管理**：管理员可以查看所有 skill 并为 skill 设置 owner
+- **浏览全部 Skill**：侧边栏对所有用户显示全部 Skill，点击名称可折叠/展开查看 SKILL.md 的 description
+- **上传需审核（含同名二次确认）**：上传 zip 包后进入待审核状态；若与已有 Skill 同名，会弹出二次确认，确认后需等待管理员审核通过才会覆盖原 Skill；管理员审核通过后才放入正式目录，方可使用
+- **撤销上传**：审核通过前，上传者可在「上传审核」区域撤销自己的上传（暂存内容被丢弃，审核记录移除）；管理员也可撤销任意待审核上传
+- **审核（管理员）**：对待审核上传可「通过」（放入正式目录，同名先覆盖）或「拒绝」（丢弃暂存内容）
+- **审批通知**：管理员审核通过 / 拒绝都会通知上传者；上传者查看后点「取消通知」可将其永久移除，之后不再发送
+- **上传前检查**：上传新 Skill 前请先查看已有 Skill 的 description，确认没有包含要上传的 Skill 的触发条件，避免重复
+- **预览 Skill**：查看 skill 目录文件树和文件内容（SKILL.md 等）；审核通过前，上传者与管理员可提前预览待审核暂存内容
+- **删除 Skill**：从磁盘和数据库中删除，仅管理员可用（普通用户不提供删除功能）
+- **Owner 权限**：每个 skill 有一个 owner；所有用户都能查看全部 skill，管理员可为 skill 设置 owner
 
 Skill 目录位于 `AmlAgent/expert-skills/log_analyse_skills/`，结构如下：
 ```
@@ -91,7 +95,7 @@ import backend.api.batch_jql_runner as batch
 
 - `parents[3]` 要求本目录正好位于 `<Rubick>/backend/tests/skill_tests/process_skills/` 这一层；
   放浅了或放深了，`import backend.api...` 都会失败。
-- `run_skills_scheduler.py` 还会把分析结果 xlsx 复制到
+- 后端服务（`process_skills/server/executor.py`）任务成功后会把分析结果 xlsx 复制到
   `skill_tests/aml_skill_review/data/user_data/<登录名小写>/`，供 Web 评审端读取。
 
 如果改成其他路径，需要同步修改上面两处相对路径逻辑。
@@ -106,12 +110,12 @@ skill_tests/
 ├── .gitignore
 ├── __init__.py
 │
-├── process_skills/                ← Python 调度与分析脚本
+├── process_skills/                ← skill 任务服务：FastAPI 调度后端 + 分析脚本
 │   ├── __init__.py
 │   ├── run_jql_with_skill_demo.py  ← 单次任务：JQL → AI Skill 分析 → 导出 xlsx
-│   ├── run_skills_scheduler.py      ← cron 调度器：按 skills_tasks.yaml 跑多个任务
-│   ├── skills_tasks.yaml            ← 任务配置（cron / JQL / skill / email / max_issues）
-│   └── skills_result_output/        ← 运行时输出（不入库：log + xlsx + pid 锁）
+│   ├── skills_tasks.yaml            ← 任务配置（cron / run_at / JQL / skill / email）
+│   ├── server/                      ← FastAPI 后端（main / executor 内置调度 / storage / config）
+│   └── skills_result_output/        ← 旧版 cron 调度的历史输出（已停用，可清理）
 │
 └── aml_skill_review/              ← Next.js 评审 Web 端
     ├── README.md                   ← 评审系统详细文档（运行 / 架构 / 接口 / 数据库表结构）
@@ -186,20 +190,19 @@ python run_jql_with_skill_demo.py \
 - `--email`：分析结果会按邮箱用户名小写复制到 `aml_skill_review/data/user_data/<用户名>/` 下，
   方便 Web 端直接选中导入。
 
-### 3）启用 cron 定时调度
+### 3）定时 / 一次性任务调度
 
-`run_skills_scheduler.py` 设计为每分钟由 crontab 唤起，按 `skills_tasks.yaml` 中的 cron 表达式判断哪些任务该执行：
-
-```cron
-* * * * * cd /home/amlogic/FAE/disk02/AutoLog/lingzhi.bi/Rubic/aml_seprime_kit/Rubick/backend/tests/skill_tests/process_skills && /home/amlogic/.pyenv/shims/python run_skills_scheduler.py >> /dev/null 2>&1
-```
+定时 / 一次性任务无需 crontab：由后端服务 `server/executor.py` 内置的
+调度线程（`start_scheduler()`）按 `skills_tasks.yaml` 中的配置自动触发。
 
 任务配置在 [`process_skills/skills_tasks.yaml`](process_skills/skills_tasks.yaml)：
 
 ```yaml
 tasks:
-  - name: over_60round_BT        # 任务名（用于输出文件命名）
-    cron: "48 14 * * *"          # 5 段 cron：分 时 日 月 周
+  - name: over_60round_BT        # 任务名
+    trigger: cron                # cron（周期）| once（指定时间一次）
+    cron: "48 14 * * *"          # 5 段 cron：分 时 日 月 周（trigger=cron 时生效）
+    run_at: "2026-10-12 18:00"   # 一次性时间（trigger=once 时生效）
     skill: "analyze_bt_log"      # Skill 名（留空则不指定技能）
     jql: |-                      # JQL 查询
       key in (OTT-84222,TV-252209,...)
@@ -207,12 +210,12 @@ tasks:
     max_issues: 1                # 最多分析条数，0=不限
 ```
 
-调度器特性：
+调度特性：
 
-- 按 cron 表达式判断任务是否该执行（支持 `* , - /`）；
-- 任务已在运行则跳过（基于 pid 锁文件，超过 24h 自动清理死锁）；
-- 子进程输出落盘到 `skills_result_output/cron_run_<task>_jql_<时间>.log`；
-- 分析结果 xlsx 落盘到 `skills_result_output/test-<task>-<时间>.xlsx`；
+- 立即执行 / 一次性 / cron 统一排队，按 `max_concurrent_tasks` 并发执行；
+- 按 cron 表达式判断任务是否该执行（支持 `* , - /`），once 任务执行后自动停用；
+- 任务日志与结果 xlsx 落盘到 `server_data/runs/<run_id>/`，
+  xlsx 命名为 `<时间>_<skill名>.xlsx`；
 - 任务成功 + 配置了 email 时，会自动生成「Final 列非空」过滤副本并复制到
   `aml_skill_review/data/user_data/<邮箱用户名小写>/`，前端即可直接选文件导入。
 
@@ -227,7 +230,8 @@ tasks:
 - pnpm 本地缓存：`.pnpm-store/`、`.pnpm-cache/`
 - 运行时数据库：`*.db`、`*.db-journal`、`*.db-shm`、`*.db-wal`
 - 用户数据目录：`data/user_data/`、`**/user_data/`
-- 任务运行输出：`process_skills/skills_result_output/`（xlsx + log + pid 锁）
+- 服务运行数据：`process_skills/server_data/`（runs/ + json 状态）
+- 旧版 cron 输出：`process_skills/skills_result_output/`（已停用，可清理）
 - 全部日志：`*.log`
 - 全部 xlsx/xls 数据文件：`*.xlsx`、`*.xls`、`*.xlsm`
 - Python 缓存：`__pycache__/`、`*.pyc`

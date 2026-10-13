@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // 任务管理页组件（/tasks 主体）
 // 作用：管理 skill 分析任务的完整生命周期：
 //  1. 顶部统计栏：运行中 / 最大并发、排队中、我的排队位置；
@@ -61,6 +61,7 @@ type TaskInfo = {
   name: string
   owner: string
   skill: string
+  skillOwner: string
   skillPath: string
   jql: string
   maxIssues: number
@@ -148,6 +149,16 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   const [tasks, setTasks] = useState<TaskInfo[]>([])
   const [stats, setStats] = useState<TaskStats | null>(null)
   const [loadingTasks, setLoadingTasks] = useState(true)
+  // ---------- 任务列表：分页 + 过滤 ----------
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const [total, setTotal] = useState(0)
+  const [filterSkill, setFilterSkill] = useState("all")
+  const [filterOwner, setFilterOwner] = useState("all")
+  const [filterFrom, setFilterFrom] = useState("")
+  const [filterTo, setFilterTo] = useState("")
+  const [skillOptions, setSkillOptions] = useState<string[]>([])
+  const [ownerOptions, setOwnerOptions] = useState<string[]>([])
 
   // ---------- 管理员配置 ----------
   const [adminMax, setAdminMax] = useState<number>(0)
@@ -203,12 +214,19 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   }, [router])
 
   /**
-   * 加载任务列表。
-   * 作用：调用 /api/backend/tasks 获取当前用户可见的全部任务。
+   * 加载任务列表（分页 + 过滤）。
+   * 作用：调用 /api/backend/tasks 获取当前可见的一页任务，并同步总数与筛选下拉选项。
    */
   const loadTasks = useCallback(async () => {
     try {
-      const res = await fetch("/api/backend/tasks")
+      const params = new URLSearchParams()
+      params.set("page", String(page))
+      params.set("page_size", String(pageSize))
+      if (filterSkill && filterSkill !== "all") params.set("skill", filterSkill)
+      if (filterOwner && filterOwner !== "all") params.set("owner", filterOwner)
+      if (filterFrom) params.set("date_from", filterFrom)
+      if (filterTo) params.set("date_to", filterTo)
+      const res = await fetch(`/api/backend/tasks?${params.toString()}`)
       if (res.status === 401) {
         router.push("/login")
         return
@@ -216,14 +234,17 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || "获取任务列表失败")
       setTasks(data.tasks || [])
-      console.log(`[任务页] 获取任务列表成功: ${data.tasks?.length || 0} 条`)
+      setTotal(data.total ?? data.tasks?.length ?? 0)
+      setSkillOptions(data.skill_options || [])
+      setOwnerOptions(data.owner_options || [])
+      console.log(`[任务页] 获取任务列表成功: ${data.tasks?.length || 0} 条 / 共 ${data.total || 0} 条`)
     } catch (err) {
       console.error("[任务页] 获取任务列表失败:", err)
       toast.error("获取任务列表失败", { description: String(err) })
     } finally {
       setLoadingTasks(false)
     }
-  }, [router])
+  }, [page, pageSize, filterSkill, filterOwner, filterFrom, filterTo, router])
 
   /**
    * 加载 skill 列表。
@@ -703,15 +724,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       <div className="mb-6 rounded-xl border border-border bg-muted/40 p-4">
         <p className="text-sm font-medium">使用说明</p>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-muted-foreground">
-          <li><span className="font-medium text-foreground">顶部统计栏：</span>查看运行中/最大并发、排队总数、你的排队位置。</li>
-          <li><span className="font-medium text-foreground">管理员配置（仅管理员可见）：</span>修改最大并发任务数（1~16），保存后立即尝试调度排队任务。</li>
-          <li>
-            <span className="font-medium text-foreground">新建任务：</span>填写任务名称、选择 Skill（名称取自各 skill.md 的 name 字段）、
-            输入 JQL、最大处理条数与通知邮箱；触发方式支持「立即执行」和「指定时间」。
-          </li>
-          <li><span className="font-medium text-foreground">配置模板：</span>「保存当前配置」把当前表单存为模板，「加载」回填到表单，「删除」移除模板。</li>
-          <li><span className="font-medium text-foreground">计划任务（指定时间）：</span>展示尚未执行的定时任务明细（任务名称、Skill、执行时间、创建时间），可点击「删除」取消该计划。</li>
-          <li><span className="font-medium text-foreground">任务列表：</span>查看状态/进度/队列位置，可用「日志」查看、「下载日志/结果」下载、「停止」终止排队或运行中的任务。</li>
+          <li><span className="font-medium text-foreground">顶部统计栏：</span>查看运行中/最大并发、排队总数、你的排队位置。其他部分的使用说明见对应功能块。</li>
         </ul>
       </div>
 
@@ -781,8 +794,14 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
           <Play className="size-4 text-muted-foreground" />
           新建任务
         </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          填写任务名称、选择 Skill（名称取自各 skill.md 的 name 字段）、输入 JQL、最大处理条数与通知邮箱；触发方式支持「立即执行」和「指定时间」。
+        </p>
         {/* 配置模板：保存当前配置 / 选择已保存配置加载或删除 */}
         <div className="mt-4 flex flex-wrap items-end gap-3 rounded-lg border border-dashed border-border p-3">
+          <p className="w-full text-xs text-muted-foreground">
+            配置模板：「保存当前配置」把当前表单存为模板，「加载」回填到表单，「删除」移除模板。
+          </p>
           <div className="min-w-[200px] flex-1 space-y-1.5">
             <Label>已保存配置</Label>
             <Select
@@ -939,6 +958,9 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
             共 <span className="font-mono font-medium text-foreground">{scheduledTasks.length}</span> 条
           </p>
         </div>
+        <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
+          展示尚未执行的定时任务明细（任务名称、Skill、执行时间、创建时间），可点击「删除」取消该计划。
+        </p>
         {scheduledTasks.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted-foreground">
             {loadingScheduled ? "加载中…" : "暂无待执行的计划任务"}
@@ -996,7 +1018,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <p className="text-sm font-medium">任务列表</p>
           <p className="text-xs text-muted-foreground">
-            共 <span className="font-mono font-medium text-foreground">{tasks.length}</span> 条
+            共 <span className="font-mono font-medium text-foreground">{total}</span> 条
             {hasActive && (
               <span className="ml-2 flex items-center gap-1">
                 <Loader2 className="size-3 animate-spin" /> 自动刷新中
@@ -1004,11 +1026,66 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
             )}
           </p>
         </div>
+        <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
+          查看状态/进度/队列位置，可用「日志」查看、「下载日志/结果」下载、「停止」终止排队或运行中的任务。
+        </p>
+        {/* 筛选栏：Skill / 上传者(管理员) / 日期范围 */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
+          <Select value={filterSkill} onValueChange={(v) => { setFilterSkill(v); setPage(1) }}>
+            <SelectTrigger className="w-[180px]"><SelectValue placeholder="全部 Skill" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部 Skill</SelectItem>
+              {skillOptions.map((s) => (
+                <SelectItem key={s} value={s}>{s}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {isAdmin && (
+            <Select value={filterOwner} onValueChange={(v) => { setFilterOwner(v); setPage(1) }}>
+              <SelectTrigger className="w-[160px]"><SelectValue placeholder="全部上传者" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部上传者</SelectItem>
+                {ownerOptions.map((o) => (
+                  <SelectItem key={o} value={o}>{o}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <div className="flex items-center gap-1.5">
+            <Input
+              type="date"
+              className="w-[150px]"
+              value={filterFrom}
+              onChange={(e) => { setFilterFrom(e.target.value); setPage(1) }}
+            />
+            <span className="text-xs text-muted-foreground">至</span>
+            <Input
+              type="date"
+              className="w-[150px]"
+              value={filterTo}
+              onChange={(e) => { setFilterTo(e.target.value); setPage(1) }}
+            />
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setFilterSkill("all")
+              setFilterOwner("all")
+              setFilterFrom("")
+              setFilterTo("")
+              setPage(1)
+            }}
+          >
+            重置
+          </Button>
+        </div>
         <Table>
           <TableHeader className="sticky top-0 z-10">
             <TableRow className="bg-muted/90 hover:bg-muted/90 backdrop-blur">
               <TableHead className="min-w-[140px]">任务名称</TableHead>
               <TableHead className="w-[120px]">Skill</TableHead>
+              <TableHead className="w-[120px]">Skill Owner</TableHead>
               <TableHead className="w-[90px]">状态</TableHead>
               <TableHead className="w-[160px]">进度</TableHead>
               <TableHead className="w-[80px]">队列位置</TableHead>
@@ -1019,14 +1096,14 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
           <TableBody>
             {tasks.length === 0 && !loadingTasks && (
               <TableRow>
-                <TableCell colSpan={7} className="py-16 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="py-16 text-center text-muted-foreground">
                   暂无任务，请在上方创建新任务
                 </TableCell>
               </TableRow>
             )}
             {loadingTasks && tasks.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="py-16 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="py-16 text-center text-muted-foreground">
                   <span className="flex items-center justify-center gap-2">
                     <Loader2 className="size-4 animate-spin" /> 加载中…
                   </span>
@@ -1042,6 +1119,9 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                   )}
                 </TableCell>
                 <TableCell className="text-sm">{task.skill || "-"}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {task.skillOwner || "-"}
+                </TableCell>
                 <TableCell>{renderStatus(task.status)}</TableCell>
                 <TableCell>{renderProgress(task)}</TableCell>
                 <TableCell className="font-mono text-xs text-muted-foreground">
@@ -1098,6 +1178,42 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
             ))}
           </TableBody>
         </Table>
+        {/* 分页栏 */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+          <p className="text-xs text-muted-foreground">
+            第 {page} / {Math.max(1, Math.ceil(total / Math.max(1, pageSize)))} 页
+          </p>
+          <div className="flex items-center gap-2">
+            <Select
+              value={String(pageSize)}
+              onValueChange={(v) => { setPageSize(Number(v)); setPage(1) }}
+            >
+              <SelectTrigger className="w-[110px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10 / 页</SelectItem>
+                <SelectItem value="20">20 / 页</SelectItem>
+                <SelectItem value="50">50 / 页</SelectItem>
+                <SelectItem value="100">100 / 页</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={page <= 1 || loadingTasks}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              上一页
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={page >= Math.max(1, Math.ceil(total / Math.max(1, pageSize))) || loadingTasks}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              下一页
+            </Button>
+          </div>
+        </div>
       </div>
 
       {/* ========== 日志查看弹窗 ========== */}

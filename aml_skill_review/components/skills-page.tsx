@@ -1,18 +1,20 @@
-﻿// ============================================================
+// ============================================================
 // Skill 管理页组件（主体）
 // 作用：承载 Skill 资源的全生命周期管理：
-//  1. 列表展示：表格展示当前用户可见的全部 Skill（普通用户只看
-//     自己的，管理员看全部），每行含名称、类型、所有者、描述、
-//     文件数、操作按钮；
+//  1. 列表展示：表格展示全部 Skill（所有用户可见全部），每行含
+//     名称、类型、所有者、描述、文件数、操作按钮；
 //  2. 上传新 Skill：弹出对话框，填写类型（已有下拉 + 自定义）、
-//     名称、zip 文件，POST 到 /api/backend/skills；
-//  3. 预览 Skill：弹出面板，左侧文件树右侧文件内容，
+//     名称、zip 文件，POST 到 /api/backend/skills；上传后进入
+//     审核暂存，管理员通过后方可放入/覆盖正式 Skill；
+//  3. 审核（管理员）：通过 /api/backend/skills/reviews/<id>/approve
+//     或 reject 处理待审核上传；
+//  4. 预览 Skill：弹出面板，左侧文件树右侧文件内容，
 //     调用 /api/backend/skills/files?path= 与 /api/backend/skills/content?path=&file=；
-//  4. 删除 Skill：确认后 DELETE /api/backend/skills/delete?path=；
-//  5. 设置所有者（管理员）：PUT /api/backend/skills/owner（body 带 path）。
+//  5. 删除 Skill：确认后 DELETE /api/backend/skills/delete?path=；
+//  6. 设置所有者（管理员）：PUT /api/backend/skills/owner（body 带 path）。
 // 注：skill 相对路径含斜杠，统一通过 query 参数 path 传递，
 //     不使用 catch-all 路由段。
-// 权限：普通用户只能管理自己的 Skill；管理员可管理全部。
+// 权限：所有用户可查看全部 Skill；上传需管理员审核。
 // ============================================================
 
 "use client"
@@ -22,11 +24,13 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
+  Bell,
   FileSpreadsheet,
   FolderTree,
   Loader2,
   LogOut,
   Eye,
+  ShieldCheck,
   Trash2,
   Upload,
   User,
@@ -63,6 +67,24 @@ type SkillFile = {
   path: string
   name: string
   size: number
+}
+
+/** 上传审核记录（与后端 list_pending_uploads 返回结构对应） */
+type ReviewItem = {
+  id: string
+  skillName: string
+  exists: boolean // 是否与已有 Skill 同名（通过后将覆盖）
+  owner: string
+  uploadedAt: string
+}
+
+/** 审核结果通知（与后端 list_notices 返回结构对应） */
+type NoticeItem = {
+  id: string
+  kind: string // approved | rejected
+  skillName: string
+  message: string
+  createdAt: string
 }
 
 /** 文件树节点：把扁平的文件路径列表组织成树结构 */
@@ -158,6 +180,23 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [loading, setLoading] = useState(true)
 
+  // ---------- 上传审核状态 ----------
+  const [reviews, setReviews] = useState<ReviewItem[]>([])
+  const [reviewingId, setReviewingId] = useState("")
+
+  // ---------- 审核结果通知状态 ----------
+  const [notices, setNotices] = useState<NoticeItem[]>([])
+  const [showNotices, setShowNotices] = useState(false)
+  const [dismissingId, setDismissingId] = useState("")
+
+  // ---------- 审核预览（暂存内容）状态 ----------
+  const [previewReview, setPreviewReview] = useState<ReviewItem | null>(null)
+  const [reviewPreviewFiles, setReviewPreviewFiles] = useState<SkillFile[]>([])
+  const [reviewSelectedFile, setReviewSelectedFile] = useState("")
+  const [reviewFileContent, setReviewFileContent] = useState("")
+  const [reviewLoadingFiles, setReviewLoadingFiles] = useState(false)
+  const [reviewLoadingContent, setReviewLoadingContent] = useState(false)
+
   // ---------- 上传对话框状态 ----------
   const [showUpload, setShowUpload] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -182,8 +221,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
 
   /**
    * 加载 Skill 列表。
-   * 作用：调用 /api/backend/skills 获取当前用户可见的全部 Skill；
-   * 普通用户只返回自己的，管理员返回全部。
+   * 作用：调用 /api/backend/skills 获取全部 Skill（所有用户可见全部）。
    */
   const loadSkills = useCallback(async () => {
     setLoading(true)
@@ -206,52 +244,131 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
     }
   }, [router])
 
+  /**
+   * 加载 Skill 上传审核列表。
+   * 作用：调用 /api/backend/skills/reviews；管理员看到全部待审核项，
+   * 普通用户只看到自己提交的待审核项。
+   */
+  const loadReviews = useCallback(async () => {
+    try {
+      const res = await fetch("/api/backend/skills/reviews")
+      if (res.status === 401) {
+        router.push("/login")
+        return
+      }
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "获取待审核列表失败")
+      setReviews(data.data || [])
+    } catch (err) {
+      console.error("[Skill管理] 获取待审核列表失败:", err)
+    }
+  }, [router])
+
+  /**
+   * 加载当前用户的审核结果通知。
+   * 作用：调用 /api/backend/skills/notices；审核通过/拒绝后展示，
+   * 用户点击「取消通知」后永久移除。
+   */
+  const loadNotices = useCallback(async () => {
+    try {
+      const res = await fetch("/api/backend/skills/notices")
+      if (res.status === 401) {
+        router.push("/login")
+        return
+      }
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "获取通知失败")
+      setNotices(data.data || [])
+    } catch (err) {
+      console.error("[Skill管理] 获取通知失败:", err)
+    }
+  }, [router])
+
   useEffect(() => {
     loadSkills()
-  }, [loadSkills])
+    loadReviews()
+    loadNotices()
+  }, [loadSkills, loadReviews, loadNotices])
 
   /**
    * 上传新 Skill。
    * 作用：组装 FormData（zip 压缩包或文件夹 + 所有者），
-   * POST 到 /api/backend/skills；成功后关闭对话框、刷新列表。
-   * 文件名取 SKILL.md 的 name 字段，保存到根目录下。
+   * POST 到 /api/backend/skills；若存在同名 Skill（409），
+   * 二次确认后带 confirm_duplicate=1 重新提交；成功后关闭对话框、刷新列表。
    */
   async function handleUpload() {
-    const formData = new FormData()
-    // 管理员可指定 owner，普通用户不传（服务端自动用自己）
-    if (isAdmin && formOwner.trim()) {
-      formData.append("owner", formOwner.trim())
-    }
+    /** 组装并提交；confirmed=true 时追加 confirm_duplicate=1 */
+    async function doSubmit(confirmed: boolean) {
+      const formData = new FormData()
+      // 管理员可指定 owner，普通用户不传（服务端自动用自己）
+      if (isAdmin && formOwner.trim()) {
+        formData.append("owner", formOwner.trim())
+      }
+      if (uploadMode === "zip") {
+        if (!zipFile) {
+          toast.error("请选择 zip 压缩包")
+          return null
+        }
+        formData.append("files", zipFile)
+      } else {
+        if (folderFiles.length === 0) {
+          toast.error("请选择要上传的文件夹")
+          return null
+        }
+        // 用相对路径作为文件名，服务端据此还原目录结构
+        for (const f of folderFiles) {
+          formData.append("files", f, f.webkitRelativePath || f.name)
+        }
+      }
+      if (confirmed) formData.append("confirm_duplicate", "1")
 
-    if (uploadMode === "zip") {
-      if (!zipFile) {
-        toast.error("请选择 zip 压缩包")
-        return
-      }
-      formData.append("files", zipFile)
-    } else {
-      if (folderFiles.length === 0) {
-        toast.error("请选择要上传的文件夹")
-        return
-      }
-      // 用相对路径作为文件名，服务端据此还原目录结构
-      for (const f of folderFiles) {
-        formData.append("files", f, f.webkitRelativePath || f.name)
-      }
+      const res = await fetch("/api/backend/skills", { method: "POST", body: formData })
+      const body = await res.json()
+      return { res, body }
     }
 
     setUploading(true)
     try {
-      const res = await fetch("/api/backend/skills", { method: "POST", body: formData })
-      const data = await res.json()
-      if (!data.ok) throw new Error(data.error || "上传失败")
-      toast.success("上传成功", {
-        description: `Skill 已保存为「${data.data?.skillPath || "未知"}」`,
-      })
-      // 重置表单 + 关闭对话框 + 刷新列表
+      const first = await doSubmit(false)
+      if (!first) return
+      // 存在同名 Skill（409）→ 二次确认后再提交
+      if (first.res.status === 409) {
+        const msg =
+          (first.body?.error as string) ||
+          "已存在同名 Skill，确认之后将等待管理员审核，审核通过后覆盖原 Skill。"
+        const ok = window.confirm(`${msg}\n\n确认上传吗？`)
+        if (!ok) return
+        const second = await doSubmit(true)
+        if (!second || !second.body?.ok) {
+          throw new Error(second?.body?.error || "上传失败")
+        }
+        // 二次确认后按是否存在同名提示
+        const uploaded = second.body.data || {}
+        toast.success(uploaded.exists ? "已提交审核（将覆盖同名 Skill）" : "已提交审核", {
+          description: uploaded.exists
+            ? `「${uploaded.skillPath || "未知"}」已提交，管理员审核通过后将覆盖原 Skill`
+            : `「${uploaded.skillPath || "未知"}」已提交，管理员审核通过后即可使用`,
+        })
+      } else {
+        if (!first.body?.ok) throw new Error(first.body?.error || "上传失败")
+        const uploaded = first.body.data || {}
+        if (uploaded.exists) {
+          // 存在同名 Skill：审核通过后才会覆盖
+          toast.success("已提交审核（存在同名 Skill）", {
+            description: `「${uploaded.skillPath || "未知"}」已提交，管理员审核通过后将覆盖原 Skill`,
+          })
+        } else {
+          toast.success("已提交审核", {
+            description: `「${uploaded.skillPath || "未知"}」已提交，管理员审核通过后即可使用`,
+          })
+        }
+      }
+      // 重置表单 + 关闭对话框 + 刷新审核列表与 Skill 列表
       resetUploadForm()
       setShowUpload(false)
+      await loadReviews()
       await loadSkills()
+      await loadNotices()
     } catch (err) {
       console.error("[Skill管理] 上传失败:", err)
       toast.error("上传失败", { description: String(err) })
@@ -266,6 +383,146 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
     setZipFile(null)
     setFolderFiles([])
     setFormOwner("")
+  }
+
+  /**
+   * 处理上传审核（仅管理员）。
+   * 作用：同意（approve）后暂存的 Skill 放入正式目录（同名先覆盖）；
+   * 拒绝（reject）后丢弃暂存内容。成功后刷新审核列表与 Skill 列表。
+   */
+  async function handleReview(review: ReviewItem, action: "approve" | "reject") {
+    if (action === "reject" && !window.confirm(`确定拒绝 Skill「${review.skillName}」的上传吗？暂存内容将被丢弃。`)) {
+      return
+    }
+    setReviewingId(review.id)
+    try {
+      const res = await fetch(`/api/backend/skills/reviews/${review.id}/${action}`, {
+        method: "POST",
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || `${action === "approve" ? "通过" : "拒绝"}失败`)
+      if (action === "approve") {
+        toast.success("已通过审核", {
+          description: `「${review.skillName}」已放入正式目录${review.exists ? "（原 Skill 已被覆盖）" : ""}`,
+        })
+      } else {
+        toast.success("已拒绝上传", { description: `「${review.skillName}」的暂存内容已丢弃` })
+      }
+      await loadReviews()
+      await loadSkills()
+    } catch (err) {
+      console.error("[Skill管理] 处理审核失败:", err)
+      toast.error(action === "approve" ? "通过失败" : "拒绝失败", { description: String(err) })
+    } finally {
+      setReviewingId("")
+    }
+  }
+
+  /**
+   * 撤销上传（审核通过前，仅该上传的 owner 可操作）。
+   * 作用：调用 POST /api/backend/skills/reviews/<id>/withdraw，
+   * 丢弃暂存内容并移除审核记录，成功后刷新审核列表。
+   */
+  async function handleWithdraw(review: ReviewItem) {
+    if (!window.confirm(`确定撤销 Skill「${review.skillName}」的上传吗？暂存内容将被丢弃。`)) return
+    setReviewingId(review.id)
+    try {
+      const res = await fetch(`/api/backend/skills/reviews/${review.id}/withdraw`, {
+        method: "POST",
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "撤回失败")
+      toast.success("已撤销上传", { description: `「${review.skillName}」的暂存内容已丢弃` })
+      await loadReviews()
+      await loadSkills()
+    } catch (err) {
+      console.error("[Skill管理] 撤销上传失败:", err)
+      toast.error("撤销失败", { description: String(err) })
+    } finally {
+      setReviewingId("")
+    }
+  }
+
+  /**
+   * 取消（读过）审核结果通知。
+   * 作用：调用 POST /api/backend/skills/notices/<id>/dismiss，
+   * 该通知将被永久移除，之后不再发送。
+   */
+  async function handleDismissNotice(notice: NoticeItem) {
+    setDismissingId(notice.id)
+    try {
+      const res = await fetch(`/api/backend/skills/notices/${notice.id}/dismiss`, {
+        method: "POST",
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "取消通知失败")
+      toast.success("已取消通知", { description: "该通知已移除，之后不再发送" })
+      await loadNotices()
+    } catch (err) {
+      console.error("[Skill管理] 取消通知失败:", err)
+      toast.error("取消通知失败", { description: String(err) })
+    } finally {
+      setDismissingId("")
+    }
+  }
+
+  /**
+   * 打开审核预览面板（审核通过前，owner 与管理员可提前查看暂存内容）。
+   * 作用：加载暂存文件树，自动选中 SKILL.md（若存在）或第一个文件。
+   */
+  async function handleReviewPreview(review: ReviewItem) {
+    setPreviewReview(review)
+    setReviewSelectedFile("")
+    setReviewFileContent("")
+    setReviewPreviewFiles([])
+    setReviewLoadingFiles(true)
+    try {
+      const res = await fetch(`/api/backend/skills/reviews/${review.id}/files`)
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "获取文件列表失败")
+      const files: SkillFile[] = data.data || []
+      setReviewPreviewFiles(files)
+      // 优先选中 SKILL.md，否则选第一个文件
+      const skillMd = files.find((f) => f.path.toUpperCase() === "SKILL.MD")
+      const target = skillMd || files[0]
+      if (target) {
+        setReviewSelectedFile(target.path)
+        loadReviewFileContent(review.id, target.path)
+      }
+      console.log(`[Skill管理] 审核预览 ${review.skillName}，共 ${files.length} 个文件`)
+    } catch (err) {
+      console.error("[Skill管理] 获取审核文件列表失败:", err)
+      toast.error("获取文件列表失败", { description: String(err) })
+    } finally {
+      setReviewLoadingFiles(false)
+    }
+  }
+
+  /** 读取审核暂存文件内容（走 /reviews/<id>/content） */
+  async function loadReviewFileContent(reviewId: string, filePath: string) {
+    setReviewLoadingContent(true)
+    setReviewFileContent("")
+    try {
+      const res = await fetch(
+        `/api/backend/skills/reviews/${reviewId}/content?file=${encodeURIComponent(filePath)}`,
+      )
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "读取文件失败")
+      setReviewFileContent(data.data || "")
+    } catch (err) {
+      console.error("[Skill管理] 读取审核文件失败:", err)
+      toast.error("读取文件失败", { description: String(err) })
+    } finally {
+      setReviewLoadingContent(false)
+    }
+  }
+
+  /** 关闭审核预览面板并清理状态 */
+  function closeReviewPreview() {
+    setPreviewReview(null)
+    setReviewPreviewFiles([])
+    setReviewSelectedFile("")
+    setReviewFileContent("")
   }
 
   /**
@@ -430,6 +687,61 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
             <Link href="/tasks" className={buttonVariants({ variant: "ghost", size: "sm" })}>
               任务
             </Link>
+            {/* 审核结果通知铃铛 */}
+            <div className="relative">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setShowNotices((v) => !v)}
+                aria-label="审核通知"
+                className="relative"
+              >
+                <Bell className="size-4" />
+                {notices.length > 0 && (
+                  <span className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-destructive text-[10px] font-semibold text-white">
+                    {notices.length > 9 ? "9+" : notices.length}
+                  </span>
+                )}
+              </Button>
+              {/* 通知下拉列表 */}
+              {showNotices && (
+                <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-xl border border-border bg-card shadow-lg">
+                  <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                    <p className="text-sm font-medium">审核通知</p>
+                    <Button variant="ghost" size="icon-sm" onClick={() => setShowNotices(false)} aria-label="关闭通知">
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                  <div className="max-h-80 overflow-auto p-2">
+                    {notices.length === 0 ? (
+                      <p className="px-2 py-4 text-center text-xs text-muted-foreground">暂无通知</p>
+                    ) : (
+                      notices.map((n) => (
+                        <div
+                          key={n.id}
+                          className="mb-1.5 flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-2.5 py-2 last:mb-0"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs leading-relaxed text-foreground">{n.message}</p>
+                            <p className="mt-0.5 text-[11px] text-muted-foreground">{n.createdAt}</p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0"
+                            disabled={dismissingId === n.id}
+                            onClick={() => handleDismissNotice(n)}
+                          >
+                            {dismissingId === n.id && <Loader2 className="size-3 animate-spin" />}
+                            取消通知
+                          </Button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             <Button variant="ghost" size="sm" onClick={handleLogout}>
               <LogOut className="size-4" />
               退出登录
@@ -437,7 +749,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
           </div>
         </div>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          管理 Skill 资源：上传 zip 压缩包或文件夹、预览文件内容、删除、设置所有者。普通用户只能管理自己的 Skill，管理员可管理全部。
+          管理 Skill 资源：上传 zip 压缩包或文件夹（上传后需管理员审核通过方可使用）、预览文件内容、删除、设置所有者。所有用户都能查看全部 Skill。
         </p>
       </header>
 
@@ -445,11 +757,12 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
       <div className="mb-6 rounded-xl border border-border bg-muted/40 p-4 text-sm leading-relaxed text-muted-foreground">
         <p className="mb-2 font-medium text-foreground">使用说明</p>
         <ul className="list-inside list-disc space-y-1">
-          <li>上传：点击左侧「上传新 Skill」，选择 zip 压缩包或一个文件夹（文件夹需包含 SKILL.md）。系统会读取 SKILL.md 中的 name 字段作为 Skill 名称，并保存到根目录。</li>
+          <li>上传：点击左侧「上传新 Skill」，选择 zip 压缩包或一个文件夹（文件夹需包含 SKILL.md）。系统会读取 SKILL.md 中的 name 字段作为 Skill 名称，上传后需管理员审核，审核通过后方可使用；若已存在同名 Skill，会弹出二次确认，确认后需等待管理员审核通过才会覆盖原 Skill。</li>
           <li>预览：在列表点击「预览」，左侧为文件树、右侧查看选中的文件内容。</li>
-          <li>删除：点击行尾垃圾桶按钮删除对应 Skill（不可恢复）。</li>
-          <li>设置所有者：管理员可点击「设主」修改 Skill 的所有者。</li>
-          <li>侧边栏：点击 Skill 名称可折叠/展开查看 SKILL.md 的 description。</li>
+          <li>审核：审核通过前，上传者可在「上传审核」区域点击「撤销」撤回本次上传（暂存内容将被丢弃）；管理员审核通过/拒绝后，右上角通知栏会收到结果通知，可点击「取消通知」将其移除（之后不再发送）。</li>
+          <li>删除：仅管理员可以删除 Skill，普通用户不提供删除功能（删除不可恢复）。</li>
+          <li>设置所有者：仅管理员可以设置/修改 Skill 的所有者。</li>
+          <li>Skill 列表：侧边栏会对所有用户显示全部 Skill；上传新 Skill 前，请先查看已有 Skill 的 description，确认其中没有包含您要上传的 Skill 的触发条件，再上传 Skill。</li>
         </ul>
       </div>
 
@@ -469,11 +782,14 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
               上传新 Skill
             </Button>
 
-            {/* Skill 列表（名称 + description 可折叠） */}
+            {/* Skill 列表（对所有用户显示全部 Skill，名称 + description 可折叠） */}
             <div className="mt-4">
-              <p className="mb-2 flex items-center gap-2 text-sm font-medium">
+              <p className="mb-1 flex items-center gap-2 text-sm font-medium">
                 <FolderTree className="size-4 text-muted-foreground" />
                 Skill 列表
+              </p>
+              <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
+                对所有用户显示全部 Skill。上传新 Skill 前，请先检查已有 Skill 的 description 是否已包含您要上传的 Skill 的触发条件，确认不重复再上传。
               </p>
               <div className="space-y-1.5">
                 {skills.length === 0 ? (
@@ -504,13 +820,105 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
               {username}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {isAdmin ? "管理员 · 可管理所有 Skill" : "普通用户 · 只能管理自己的 Skill"}
+              {isAdmin ? "管理员 · 可管理全部 Skill" : "普通用户 · 可查看全部 Skill"}
             </p>
           </div>
         </aside>
 
         {/* ========== 右侧主区域：Skill 列表表格 ========== */}
         <main className="min-w-0 flex-1">
+          {/* 上传审核区 */}
+          {reviews.length > 0 && (
+            <div className="mb-4 rounded-xl border border-border bg-card p-4">
+              <p className="mb-2 flex items-center gap-2 text-sm font-medium">
+                <ShieldCheck className="size-4 text-muted-foreground" />
+                上传审核
+                <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-xs">
+                  {reviews.length}
+                </span>
+              </p>
+              <div className="space-y-2">
+                {reviews.map((review) => (
+                  <div
+                    key={review.id}
+                    className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2"
+                  >
+                    <span className="font-mono text-sm font-medium">{review.skillName}</span>
+                    {review.exists && (
+                      <span className="rounded bg-yellow-500/15 px-1.5 py-0.5 text-xs text-yellow-700 dark:text-yellow-400">
+                        同名将覆盖
+                      </span>
+                    )}
+                    <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-xs text-sky-700 dark:text-sky-400">
+                      待审核
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      上传者：{review.owner}
+                      <span className="mx-1">·</span>
+                      {review.uploadedAt}
+                    </span>
+                    <div className="ml-auto flex gap-1.5">
+                      {/* 审核通过前，owner 与管理员可预览暂存内容 */}
+                      {(isAdmin || review.owner === username) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={reviewingId === review.id}
+                          onClick={() => handleReviewPreview(review)}
+                        >
+                          <Eye className="size-3.5" />
+                          预览
+                        </Button>
+                      )}
+                      {isAdmin ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="default"
+                            disabled={reviewingId === review.id}
+                            onClick={() => handleReview(review, "approve")}
+                          >
+                            {reviewingId === review.id && (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            )}
+                            通过
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={reviewingId === review.id}
+                            onClick={() => handleReview(review, "reject")}
+                          >
+                            拒绝
+                          </Button>
+                        </>
+                      ) : (
+                        review.owner === username && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={reviewingId === review.id}
+                            onClick={() => handleWithdraw(review)}
+                          >
+                            {reviewingId === review.id && (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            )}
+                            撤销
+                          </Button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {!isAdmin && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  您的上传正在等待管理员审核，审核通过前可点击「撤销」撤回上传。
+                </p>
+              )}
+            </div>
+          )}
+
           {/* 工具条：总条数 + 刷新按钮 */}
           <div className="mb-3 flex items-center justify-between">
             <p className="text-sm text-muted-foreground">
@@ -581,14 +989,16 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
                             设主
                           </Button>
                         )}
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => handleDelete(skill)}
-                          aria-label="删除"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
+                        {isAdmin && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => handleDelete(skill)}
+                            aria-label="删除"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -695,7 +1105,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
               )}
 
               <p className="text-xs leading-relaxed text-muted-foreground">
-                系统会读取 SKILL.md 中的 name 字段作为 Skill 名称，并保存到根目录（重复名称会覆盖）。
+                系统会读取 SKILL.md 中的 name 字段作为 Skill 名称。如果已存在同名 Skill，会弹出确认框要求二次确认，确认后需等待管理员审核，审核通过后才会覆盖原 Skill；否则提交后等待管理员审核，审核通过后才会放入，方可使用。审核通过前，可在「上传审核」区域撤销本次上传。
               </p>
 
               {/* 操作按钮 */}
@@ -781,6 +1191,89 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
                     </p>
                     <pre className="min-h-0 flex-1 overflow-auto rounded-lg bg-muted p-3 text-xs leading-relaxed">
                       <code>{fileContent}</code>
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== 审核预览面板（审核通过前，owner 与管理员可查看暂存内容） ========== */}
+      {previewReview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeReviewPreview()
+          }}
+        >
+          <div className="flex h-[80vh] w-full max-w-5xl flex-col rounded-xl border border-border bg-card shadow-lg">
+            {/* 头部 */}
+            <div className="flex items-center justify-between border-b border-border p-4">
+              <div className="min-w-0">
+                <h2 className="flex items-center gap-2 text-lg font-semibold">
+                  {previewReview.skillName}
+                  <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-xs text-sky-700 dark:text-sky-400">
+                    待审核预览
+                  </span>
+                  {previewReview.exists && (
+                    <span className="rounded bg-yellow-500/15 px-1.5 py-0.5 text-xs text-yellow-700 dark:text-yellow-400">
+                      同名将覆盖
+                    </span>
+                  )}
+                </h2>
+                <p className="truncate font-mono text-xs text-muted-foreground">
+                  上传者：{previewReview.owner} · {previewReview.uploadedAt}
+                </p>
+              </div>
+              <Button variant="ghost" size="icon-sm" onClick={closeReviewPreview} aria-label="关闭">
+                <X className="size-4" />
+              </Button>
+            </div>
+
+            {/* 主体：左侧文件树 + 右侧文件内容 */}
+            <div className="flex min-h-0 flex-1">
+              {/* 左侧：文件树 */}
+              <div className="w-64 shrink-0 overflow-auto border-r border-border p-2">
+                <p className="mb-2 flex items-center gap-1.5 px-1 text-xs font-medium text-muted-foreground">
+                  <FolderTree className="size-3.5" />
+                  暂存文件
+                </p>
+                {reviewLoadingFiles ? (
+                  <p className="flex items-center gap-1.5 px-1 py-2 text-xs text-muted-foreground">
+                    <Loader2 className="size-3 animate-spin" /> 加载中…
+                  </p>
+                ) : reviewPreviewFiles.length === 0 ? (
+                  <p className="px-1 py-2 text-xs text-muted-foreground">暂无文件</p>
+                ) : (
+                  renderTreeNodes(
+                    buildFileTree(reviewPreviewFiles),
+                    0,
+                    reviewSelectedFile,
+                    (path) => {
+                      setReviewSelectedFile(path)
+                      loadReviewFileContent(previewReview.id, path)
+                    },
+                  )
+                )}
+              </div>
+
+              {/* 右侧：文件内容 */}
+              <div className="min-w-0 flex-1 overflow-auto p-4">
+                {reviewLoadingContent ? (
+                  <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" /> 加载中…
+                  </p>
+                ) : !reviewSelectedFile ? (
+                  <p className="text-sm text-muted-foreground">请从左侧选择一个文件查看内容</p>
+                ) : (
+                  <div className="flex h-full flex-col">
+                    <p className="mb-2 font-mono text-xs text-muted-foreground">
+                      {reviewSelectedFile}
+                    </p>
+                    <pre className="min-h-0 flex-1 overflow-auto rounded-lg bg-muted p-3 text-xs leading-relaxed">
+                      <code>{reviewFileContent}</code>
                     </pre>
                   </div>
                 )}

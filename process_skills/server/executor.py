@@ -6,8 +6,8 @@
   task_state.json，调度线程按 max_concurrent_tasks 取出执行。
 - 执行方式：subprocess 调 run_jql_with_skill_demo.py（cwd=Rubick 根），
   stdout 实时写日志并解析 [i/N] 更新进度。
-- cron 触发复用 run_skills_scheduler.cron_match；
-- 成功后复用其 _make_filtered_xlsx / copy_to_user_dirs 把结果复制给收件人。
+- cron 表达式匹配与结果过滤复制逻辑（cron_match / _make_filtered_xlsx /
+  copy_to_user_dirs）已内联在本文件中。
 """
 from __future__ import annotations
 
@@ -23,10 +23,6 @@ from typing import Any
 
 from . import config, storage
 
-# 复用现有 cron 匹配 / 结果过滤复制逻辑（process_skills/ 在 sys.path 中）
-sys.path.insert(0, str(config.HERE))
-import run_skills_scheduler as legacy  # noqa: E402
-
 _PROGRESS_RE = re.compile(r"\[(\d+)/(\d+)\]")
 
 # run_id -> Popen（内存态，用于停止）
@@ -35,6 +31,185 @@ _procs_lock = threading.Lock()
 
 # 终端状态
 _DONE_STATUSES = {"completed", "failed", "stopped"}
+
+
+# ════════════════════════════════════════════════════════════════════════
+# cron 表达式匹配（支持 * , - / ）
+# ════════════════════════════════════════════════════════════════════════
+_FIELD_RANGES = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 7)]
+
+
+def _log(msg: str) -> None:
+    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
+
+
+def _field_match(field: str, value: int, lo: int, hi: int) -> bool:
+    for part in field.split(","):
+        part = part.strip()
+        step = 1
+        if "/" in part:
+            part, step_s = part.split("/", 1)
+            step = int(step_s)
+        if part == "*":
+            start, end = lo, hi
+        elif "-" in part:
+            a, b = part.split("-", 1)
+            start, end = int(a), int(b)
+        else:
+            start = end = int(part)
+        if start <= value <= end and (value - start) % step == 0:
+            return True
+    return False
+
+
+def cron_match(cron_expr: str, now: datetime) -> bool:
+    fields = cron_expr.split()
+    if len(fields) != 5:
+        raise ValueError(f"非法 cron 表达式: {cron_expr!r}")
+    values = [now.minute, now.hour, now.day, now.month, now.weekday()]
+    # cron 周日=0/7，python weekday() 周一=0 → 转换为周日=0
+    values[4] = (values[4] + 1) % 7
+    for field, value, (lo, hi) in zip(fields, values, _FIELD_RANGES):
+        if not _field_match(field, value, lo, hi):
+            return False
+    return True
+
+
+# ════════════════════════════════════════════════════════════════════════
+# xlsx 结果过滤 + 复制给收件人
+# ════════════════════════════════════════════════════════════════════════
+def _make_filtered_xlsx(src_xlsx: Path) -> Path:
+    """生成一个过滤副本：只保留「Final / Skill Final」列非空的行。
+
+    规则说明：
+      - 第 1 行表头必须存在，且能找到 Final 列（大小写/两侧空白不敏感）。
+        常见列名：``Final`` / ``Skill Final`` / ``skill final`` / ``Final (Skill)``
+        等只要包含 "final" 字样即可命中；若同时多列命中，取最左一列。
+      - 从第 2 行开始，只有 Final 单元格的 ``str(value).strip()`` 非空才保留。
+      - 若所有数据行都满足条件（无需过滤），直接返回原文件 ``src_xlsx``，
+        不生成多余副本，减少 IO 与磁盘占用。
+      - 过滤版输出路径与原文件同目录，文件名追加 ``-filtered`` 后缀。
+      - 读取/写入失败都返回原文件，外层 shutil.copy2 继续走最安全路径。
+    """
+    from openpyxl import load_workbook, Workbook
+
+    try:
+        src_wb = load_workbook(str(src_xlsx))
+    except Exception as e:
+        _log(f"  ⚠ 载入 {src_xlsx.name} 失败，跳过过滤: {e}")
+        return src_xlsx
+
+    try:
+        src_ws = src_wb.active
+        max_row = src_ws.max_row or 1
+        max_col = src_ws.max_column or 1
+
+        if max_row <= 1:
+            src_wb.close()
+            return src_xlsx
+
+        header_row_values = [
+            (src_ws.cell(row=1, column=c).value or "") for c in range(1, max_col + 1)
+        ]
+        final_col = None
+        for idx, h in enumerate(header_row_values):
+            h_norm = str(h).strip().lower()
+            if "final" in h_norm:
+                final_col = idx + 1
+                break
+        if final_col is None:
+            src_wb.close()
+            _log(f"  ⚠ {src_xlsx.name} 未找到 Final 列，跳过过滤")
+            return src_xlsx
+
+        kept_rows = []
+        total_data = 0
+        for r in range(2, max_row + 1):
+            total_data += 1
+            final_val = src_ws.cell(row=r, column=final_col).value or ""
+            if str(final_val).strip():
+                kept_rows.append(r)
+
+        if len(kept_rows) == total_data:
+            src_wb.close()
+            return src_xlsx
+
+        dst_wb = Workbook()
+        dst_ws = dst_wb.active
+        dst_ws.title = getattr(src_ws, "title", "Filtered Results")
+
+        for c in range(1, max_col + 1):
+            src_cell = src_ws.cell(row=1, column=c)
+            dst_cell = dst_ws.cell(row=1, column=c, value=src_cell.value)
+            if src_cell.has_style:
+                try:
+                    dst_cell.font = src_cell.font.copy()
+                    dst_cell.fill = src_cell.fill.copy()
+                    dst_cell.alignment = src_cell.alignment.copy()
+                    dst_cell.border = src_cell.border.copy()
+                    dst_cell.number_format = src_cell.number_format
+                    dst_cell.protection = src_cell.protection.copy()
+                except Exception:
+                    pass
+
+        for dst_idx, src_r in enumerate(kept_rows, start=2):
+            for c in range(1, max_col + 1):
+                src_cell = src_ws.cell(row=src_r, column=c)
+                dst_cell = dst_ws.cell(row=dst_idx, column=c, value=src_cell.value)
+                try:
+                    dst_cell.alignment = src_cell.alignment.copy()
+                    dst_cell.number_format = src_cell.number_format
+                except Exception:
+                    pass
+
+        try:
+            for col_idx in range(1, max_col + 1):
+                col_letter = dst_ws.cell(row=1, column=col_idx).column_letter
+                dim = getattr(src_ws.column_dimensions, "get", None)
+                if dim and src_ws.column_dimensions.get(col_letter):
+                    dst_ws.column_dimensions[col_letter].width = (
+                        src_ws.column_dimensions[col_letter].width
+                    )
+        except Exception:
+            pass
+
+        dst_path = src_xlsx.with_name(f"{src_xlsx.stem}-filtered{src_xlsx.suffix}")
+        try:
+            dst_wb.save(str(dst_path))
+            _log(
+                f"  ▼ 已生成过滤版 {dst_path.name}: "
+                f"保留 {len(kept_rows)}/{total_data} 行（Final 非空）"
+            )
+            return dst_path
+        except Exception as e:
+            _log(f"  ⚠ 保存过滤版 {dst_path.name} 失败，回退原版: {e}")
+            return src_xlsx
+        finally:
+            try:
+                dst_wb.close()
+            except Exception:
+                pass
+    finally:
+        try:
+            src_wb.close()
+        except Exception:
+            pass
+
+
+def copy_to_user_dirs(name: str, output_xlsx: Path, email: str) -> None:
+    """按 email 提取用户名（小写），复制结果到 user_data/{用户名}/ 目录。"""
+    for addr in email.split(","):
+        addr = addr.strip()
+        if "@" not in addr:
+            continue
+        username = addr.split("@", 1)[0].lower()
+        user_dir = config.USER_DATA_ROOT / username
+        try:
+            user_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(output_xlsx, user_dir / output_xlsx.name)
+            _log(f"  ✓ 已复制 {output_xlsx.name} → {user_dir}/")
+        except Exception as e:
+            _log(f"  ✗ 复制到 {user_dir}/ 失败: {e}")
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -51,7 +226,9 @@ def _make_run(
     mode: str,
     task_id: str | None,
 ) -> dict[str, Any]:
-    run_id = storage.gen_id("task")
+    run_id = storage.gen_task_id(skill)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    xlsx_name = f"{ts}_{storage.slug(skill)}.xlsx"
     run_dir = config.RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     now = storage.now_str()
@@ -71,7 +248,7 @@ def _make_run(
         "progressTotal": 0,
         "progressMessage": "排队中",
         "logPath": str(run_dir / "output.log"),
-        "outputPath": str(run_dir / "result.xlsx"),
+        "outputPath": str(run_dir / xlsx_name),
         "pid": None,
         "queuePosition": 0,
         "createdAt": now,
@@ -111,20 +288,109 @@ def _ordered_runs(state: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
-def list_runs(owner: str, is_admin: bool) -> list[dict[str, Any]]:
+def _skill_owner_map() -> dict[str, str]:
+    """构建 skill 标识（名称或相对路径）→ owner 的映射。
+
+    任务记录只存 skill 名称（如 aml-display-debug），而 owner 存储在
+    skill_owners.json（key 为 skill 相对路径）。此处同时按 skillName 与
+    相对路径两种标识建立映射，保证新旧数据都能命中。
+    """
+    result: dict[str, str] = {}
+    try:
+        from . import skills_mgr
+        for info in skills_mgr.list_skills("", True):
+            name = str(info.get("skillName") or "").strip()
+            owner = str(info.get("owner") or "").strip()
+            if name and owner and name not in result:
+                result[name] = owner
+    except Exception as e:
+        _log(f"构建 skill owner 映射失败: {e}")
+    try:
+        for path, row in (storage.load_owners() or {}).items():
+            owner = str((row or {}).get("owner") or "").strip()
+            if owner and path not in result:
+                result[path] = owner
+    except Exception as e:
+        _log(f"加载 skill owners 失败: {e}")
+    return result
+
+
+def list_runs(
+    owner: str,
+    is_admin: bool,
+    page: int = 1,
+    page_size: int = 20,
+    owner_filter: str = "",
+    skill_filter: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> dict[str, Any]:
+    """列出任务（按创建时间倒序），支持分页与 owner / skill / 日期范围过滤。
+
+    返回 {items, total, page, page_size, owner_options, skill_options}：
+      - items: 当前页任务（含重算后的 queuePosition）
+      - total: 过滤后的总条数（供前端分页）
+      - owner_options / skill_options: 当前用户可见任务中出现的去重选项（供下拉筛选）
+    """
     state = storage.load_state()
     runs = _ordered_runs(state)
     if not is_admin:
         runs = [r for r in runs if r.get("owner") == owner]
-    # 重算排队位置
+
+    owner_f = (owner_filter or "").strip().lower()
+    skill_f = (skill_filter or "").strip().lower()
+    if owner_f:
+        runs = [r for r in runs if str(r.get("owner", "")).strip().lower() == owner_f]
+    if skill_f:
+        runs = [r for r in runs if skill_f in str(r.get("skill", "")).lower()]
+    if date_from:
+        runs = [r for r in runs if str(r.get("createdAt", ""))[:10] >= date_from.strip()]
+    if date_to:
+        runs = [r for r in runs if str(r.get("createdAt", ""))[:10] <= date_to.strip()]
+
+    total = len(runs)
+    page = max(1, int(page))
+    page_size = min(100, max(1, int(page_size)))
+    start = (page - 1) * page_size
+    items = runs[start : start + page_size]
+
+    # 重算排队位置（基于全部排队任务，全局位置）
     queued = sorted(
         [r for r in state["runs"].values() if r["status"] == "queued"],
         key=lambda r: r.get("createdAt", ""),
     )
     pos_map = {r["id"]: i + 1 for i, r in enumerate(queued)}
-    for r in runs:
-        r["queuePosition"] = pos_map.get(r["id"], 0)
-    return runs
+    # 附加展示字段：全局队列位置 + skill owner（浅拷贝，避免污染存储的内存 dict）
+    owners_by_skill = _skill_owner_map()
+    items = [
+        {
+            **r,
+            "queuePosition": pos_map.get(r["id"], 0),
+            "skillOwner": owners_by_skill.get(str(r.get("skill", "")), ""),
+        }
+        for r in items
+    ]
+
+    # 下拉选项：基于权限可见的全量任务去重
+    base = (
+        list(state["runs"].values())
+        if is_admin
+        else [r for r in state["runs"].values() if r.get("owner") == owner]
+    )
+    owner_options = sorted(
+        {str(r.get("owner", "")).strip() for r in base if str(r.get("owner", "")).strip()}
+    )
+    skill_options = sorted(
+        {str(r.get("skill", "")).strip() for r in base if str(r.get("skill", "")).strip()}
+    )
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "owner_options": owner_options,
+        "skill_options": skill_options,
+    }
 
 
 def get_run(run_id: str, owner: str, is_admin: bool) -> dict[str, Any] | None:
@@ -326,8 +592,8 @@ def _execute_run(run_id: str) -> None:
     # 成功且有邮箱：生成过滤版并复制到收件人的 user_data 目录
     if final_status == "completed" and output_path.exists() and run.get("email"):
         try:
-            filtered = legacy._make_filtered_xlsx(output_path)
-            legacy.copy_to_user_dirs(run["name"], filtered, run["email"])
+            filtered = _make_filtered_xlsx(output_path)
+            copy_to_user_dirs(run["name"], filtered, run["email"])
         except Exception as e:
             print(f"[executor] 结果复制失败: {e}", flush=True)
 
@@ -353,7 +619,7 @@ def _due_cron_and_once_runs() -> list[dict[str, Any]]:
 
         if trigger == "cron" and d.get("cron"):
             try:
-                if legacy.cron_match(d["cron"], now) and fired_map.get(task_id) != minute_key:
+                if cron_match(d["cron"], now) and fired_map.get(task_id) != minute_key:
                     should_fire = True
             except ValueError:
                 continue

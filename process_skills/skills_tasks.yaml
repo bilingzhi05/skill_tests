@@ -13,8 +13,8 @@
 #   email      : 收件人邮箱（逗号分隔，结果会复制到 user_data/<用户名>/）
 #   max_issues : 最多送 AI 分析条数（0=不限）
 #   created_t  : 创建时间
-# 注意：本服务运行时请停用原 crontab 中的 run_skills_scheduler.py，
-#       避免 cron 任务被双重触发。
+# 注意：定时触发由后端内置调度线程完成（server/executor.py），
+#       无需 crontab。
 # ============================================================
 tasks:
 - name: over_60round_BT
@@ -46,3 +46,14 @@ tasks:
   email: lingzhi.bi@amlogic.com
   max_issues: 1
   created_t: '2026-10-09 19:25:29'
+- id: tsk_1791793443353_e119af
+  name: over_60round_BT
+  owner: lingzhi.bi
+  enabled: false
+  trigger: once
+  run_at: 2026-10-12 16:26
+  skill: aml-display-debug
+  jql: key in (OTT-84222,TV-252209,TV-252366,TV-252686,TV-252094,TV-243794,OTT-100792)
+  email: bilingzhi05@gmail.com
+  max_issues: 1
+  created_t: '2026-10-12 16:24:03'
