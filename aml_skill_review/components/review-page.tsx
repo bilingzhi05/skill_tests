@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { VerdictBadge } from "@/components/verdict-badge"
+import { AppNavbar } from "@/components/app-navbar"
 
 /** Jira 工单详情页网址前缀（Jira ID 拼接在后面） */
 const JIRA_BASE_URL = "https://jira.amlogic.com/browse"
@@ -182,12 +183,16 @@ export function ReviewPage({
   verdictFilter = "",
   humanFilter = "",
   dataUser = "",
+  username,
+  isAdmin,
 }: {
   jiraId: string
   table: string
   verdictFilter?: string
   humanFilter?: string
   dataUser?: string
+  username: string
+  isAdmin: boolean
 }) {
   const router = useRouter()
 
@@ -402,7 +407,7 @@ export function ReviewPage({
       <div className="mx-auto max-w-md py-24 text-center">
         <p className="text-lg font-medium">未找到该工单</p>
         <p className="mt-1 text-sm text-muted-foreground">{loadError || `Jira ID：${jiraId}`}</p>
-        <Link href="/" className={buttonVariants({ variant: "outline", className: "mt-6" })}>
+        <Link href="/analysis" className={buttonVariants({ variant: "outline", className: "mt-6" })}>
           <ArrowLeft className="size-4" />
           返回列表
         </Link>
@@ -411,16 +416,16 @@ export function ReviewPage({
   }
 
   return (
-    <div className="w-full px-2 py-4 md:px-4">
-      {/* 顶部导航：返回列表 / 统计页 */}
+    <div>
+      <AppNavbar username={username} isAdmin={isAdmin} />
+      <div className="mx-auto w-full max-w-7xl px-2 py-4 md:px-4">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <Link href="/" className={buttonVariants({ variant: "ghost", size: "sm", className: "-ml-2" })}>
-          <ArrowLeft className="size-4" />
-          返回列表
-        </Link>
+        <span className="text-sm text-muted-foreground">当前数据表：{table}</span>
         <Link
-          href={`/stats?table=${encodeURIComponent(table)}`}
-          className={buttonVariants({ variant: "ghost", size: "sm" })}
+          href={`/stats?table=${encodeURIComponent(table)}${
+            dataUser ? `&user=${encodeURIComponent(dataUser)}` : ""
+          }`}
+          className={buttonVariants({ variant: "outline", size: "sm" })}
         >
           <BarChart3 className="size-4" />
           评审统计
@@ -649,6 +654,7 @@ export function ReviewPage({
             </CardContent>
           </Card>
         </div>
+      </div>
       </div>
     </div>
   )

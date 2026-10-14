@@ -81,8 +81,14 @@ def health() -> dict[str, Any]:
 # Skill 管理
 # ════════════════════════════════════════════════════════════════════════
 @app.get("/api/backend/skills")
-def api_list_skills(caller: Caller = Depends(auth)) -> dict[str, Any]:
-    return {"ok": True, "data": skills_mgr.list_skills(caller.username, caller.is_admin)}
+def api_list_skills(
+    mine: bool = Query(False), caller: Caller = Depends(auth)
+) -> dict[str, Any]:
+    # mine=1 且非管理员时，只返回该用户负责的 Skill（新建任务下拉用）
+    return {
+        "ok": True,
+        "data": skills_mgr.list_skills(caller.username, caller.is_admin, mine=mine),
+    }
 
 
 @app.get("/api/backend/skills/types")
@@ -267,6 +273,7 @@ def api_dismiss_notice(notice_id: str, caller: Caller = Depends(auth)) -> dict[s
 class CreateTaskBody(BaseModel):
     name: str = ""
     skill: str = ""
+    skillPath: str = ""
     jql: str
     maxIssues: int = 0
     email: str = ""
@@ -317,12 +324,20 @@ def api_create_task(body: CreateTaskBody, caller: Caller = Depends(auth)) -> dic
         raise HTTPException(status_code=400, detail="JQL 不能为空")
     name = body.name.strip() or "未命名任务"
 
-    # 立即执行：直接入运行队列
+    # 普通用户只能使用自己负责的 Skill（管理员不受限）
+    if not skills_mgr.assert_skill_accessible(body.skill, caller.username, caller.is_admin) or not (
+        skills_mgr.assert_skill_accessible(body.skillPath, caller.username, caller.is_admin)
+    ):
+        raise HTTPException(status_code=403, detail="无权使用该 Skill：只能使用自己负责的 Skill")
+
+    # 立即执行：管理员直接入队执行；普通用户创建待审核任务（pending）
     if body.mode == "immediate":
-        run = executor.create_immediate_run(body.model_dump(), caller.username)
+        run = executor.create_immediate_run(
+            body.model_dump(), caller.username, pending=not caller.is_admin
+        )
         return {"ok": True, "task": run}
 
-    # 定时执行：写入 yaml 定义
+    # 定时执行：写入 yaml 定义（普通用户创建的定义需管理员审核后才触发）
     if not body.runAt:
         raise HTTPException(status_code=400, detail="once 模式必须提供 runAt")
     try:
@@ -341,6 +356,7 @@ def api_create_task(body: CreateTaskBody, caller: Caller = Depends(auth)) -> dic
         "jql": body.jql,
         "email": body.email,
         "max_issues": int(body.maxIssues or 0),
+        "review": "approved" if caller.is_admin else "pending",
         "created_t": storage.now_str(),
     }
     storage.upsert_task_def(task_def)
@@ -423,6 +439,11 @@ def api_create_preset(body: CreatePresetBody, caller: Caller = Depends(auth)) ->
         raise HTTPException(status_code=400, detail="配置名称不能为空")
     if not body.jql.strip():
         raise HTTPException(status_code=400, detail="JQL 不能为空")
+    # 普通用户只能保存自己负责的 Skill（管理员不受限）
+    if not skills_mgr.assert_skill_accessible(body.skill, caller.username, caller.is_admin) or not (
+        skills_mgr.assert_skill_accessible(body.skillPath, caller.username, caller.is_admin)
+    ):
+        raise HTTPException(status_code=403, detail="无权使用该 Skill：只能使用自己负责的 Skill")
     if body.mode == "once":
         if not body.runAt:
             raise HTTPException(status_code=400, detail="once 模式必须提供 runAt")
@@ -470,6 +491,7 @@ def _to_scheduled(d: dict[str, Any]) -> dict[str, Any]:
         "maxIssues": d.get("max_issues", 0),
         "runAt": d.get("run_at"),
         "createdAt": d.get("created_t"),
+        "review": d.get("review", "approved"),
     }
 
 
@@ -482,10 +504,69 @@ def api_list_scheduled(caller: Caller = Depends(auth)) -> dict[str, Any]:
             continue
         if not d.get("enabled", True):
             continue
+        if d.get("review") == "rejected":
+            continue
         if not caller.is_admin and d.get("owner") != caller.username:
             continue
         result.append(_to_scheduled(d))
     return {"ok": True, "data": result}
+
+
+# ---- 任务审核：普通用户创建的任务（立即执行 / 指定时间）由管理员通过或拒绝 ----
+@app.get("/api/backend/approvals")
+def api_list_approvals(caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+    defs = [
+        {
+            "id": d.get("id"),
+            "name": d.get("name"),
+            "owner": d.get("owner"),
+            "skill": d.get("skill"),
+            "jql": d.get("jql"),
+            "email": d.get("email"),
+            "runAt": d.get("run_at"),
+            "createdAt": d.get("created_t"),
+        }
+        for d in storage.load_task_defs()
+        if d.get("enabled", True) and d.get("review") == "pending"
+    ]
+    return {"ok": True, "runs": executor.list_pending_runs(), "defs": defs}
+
+
+@app.post("/api/backend/approvals/run/{run_id}/accept")
+def api_accept_run(run_id: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+    if not executor.set_run_review_status(run_id, "queued"):
+        raise HTTPException(status_code=404, detail="任务不存在或非待审核状态")
+    return {"ok": True}
+
+
+@app.post("/api/backend/approvals/run/{run_id}/reject")
+def api_reject_run(run_id: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+    if not executor.set_run_review_status(run_id, "rejected"):
+        raise HTTPException(status_code=404, detail="任务不存在或非待审核状态")
+    return {"ok": True}
+
+
+@app.post("/api/backend/approvals/def/{task_id}/accept")
+def api_accept_def(task_id: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+    defs = storage.load_task_defs()
+    target = next((d for d in defs if d.get("id") == task_id), None)
+    if target is None or target.get("review") != "pending":
+        raise HTTPException(status_code=404, detail="计划任务不存在或非待审核状态")
+    target["review"] = "approved"
+    storage.upsert_task_def(target)
+    return {"ok": True}
+
+
+@app.post("/api/backend/approvals/def/{task_id}/reject")
+def api_reject_def(task_id: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+    defs = storage.load_task_defs()
+    target = next((d for d in defs if d.get("id") == task_id), None)
+    if target is None or target.get("review") != "pending":
+        raise HTTPException(status_code=404, detail="计划任务不存在或非待审核状态")
+    target["review"] = "rejected"
+    target["enabled"] = False
+    storage.upsert_task_def(target)
+    return {"ok": True}
 
 
 @app.delete("/api/backend/scheduled-tasks/{task_id}")

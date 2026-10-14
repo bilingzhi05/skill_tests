@@ -20,5 +20,12 @@ export default async function Page({
   // 2. Next.js 16 中 searchParams 是异步对象，需要 await
   const sp = await searchParams
   // 管理员查看其他用户的统计时带上 user 参数
-  return <StatsPage table={sp.table || ""} dataUser={sp.user || ""} />
+  return (
+    <StatsPage
+      table={sp.table || ""}
+      dataUser={sp.user || ""}
+      username={user.username}
+      isAdmin={user.is_admin === 1}
+    />
+  )
 }

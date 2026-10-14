@@ -1,8 +1,9 @@
 // ============================================================
 // Skill 管理页组件（主体）
 // 作用：承载 Skill 资源的全生命周期管理：
-//  1. 列表展示：表格展示全部 Skill（所有用户可见全部），每行含
-//     名称、类型、所有者、描述、文件数、操作按钮；
+//  1. 列表展示：主表格展示当前用户（owner）的 Skill，管理员可查看
+//     全部；页面顶部「全部 Skill 缩略图」对所有用户可见全部（可搜索、可折叠），
+//     每行含名称、类型、所有者、描述、文件数、操作按钮；
 //  2. 上传新 Skill：弹出对话框，填写类型（已有下拉 + 自定义）、
 //     名称、zip 文件，POST 到 /api/backend/skills；上传后进入
 //     审核暂存，管理员通过后方可放入/覆盖正式 Skill；
@@ -14,7 +15,8 @@
 //  6. 设置所有者（管理员）：PUT /api/backend/skills/owner（body 带 path）。
 // 注：skill 相对路径含斜杠，统一通过 query 参数 path 传递，
 //     不使用 catch-all 路由段。
-// 权限：所有用户可查看全部 Skill；上传需管理员审核。
+// 权限：所有用户可查看顶部「全部 Skill 缩略图中的全部 Skill；
+// 主表格仅展示自己（owner）的 Skill，管理员可见全部。
 // ============================================================
 
 "use client"
@@ -24,12 +26,13 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
-  Bell,
+  ChevronDown,
+  ChevronRight,
   FileSpreadsheet,
   FolderTree,
   Loader2,
-  LogOut,
   Eye,
+  Search,
   ShieldCheck,
   Trash2,
   Upload,
@@ -38,6 +41,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { AppNavbar } from "@/components/app-navbar"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -76,15 +80,6 @@ type ReviewItem = {
   exists: boolean // 是否与已有 Skill 同名（通过后将覆盖）
   owner: string
   uploadedAt: string
-}
-
-/** 审核结果通知（与后端 list_notices 返回结构对应） */
-type NoticeItem = {
-  id: string
-  kind: string // approved | rejected
-  skillName: string
-  message: string
-  createdAt: string
 }
 
 /** 文件树节点：把扁平的文件路径列表组织成树结构 */
@@ -180,14 +175,13 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [loading, setLoading] = useState(true)
 
+  // ---------- 全部 Skill 缩略图状态（所有用户可见，可搜索、可折叠） ----------
+  const [thumbExpanded, setThumbExpanded] = useState(true)
+  const [thumbKeyword, setThumbKeyword] = useState("")
+
   // ---------- 上传审核状态 ----------
   const [reviews, setReviews] = useState<ReviewItem[]>([])
   const [reviewingId, setReviewingId] = useState("")
-
-  // ---------- 审核结果通知状态 ----------
-  const [notices, setNotices] = useState<NoticeItem[]>([])
-  const [showNotices, setShowNotices] = useState(false)
-  const [dismissingId, setDismissingId] = useState("")
 
   // ---------- 审核预览（暂存内容）状态 ----------
   const [previewReview, setPreviewReview] = useState<ReviewItem | null>(null)
@@ -221,7 +215,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
 
   /**
    * 加载 Skill 列表。
-   * 作用：调用 /api/backend/skills 获取全部 Skill（所有用户可见全部）。
+   * 作用：调用 /api/backend/skills 获取全部 Skill，供主表格与顶部缩略图使用。
    */
   const loadSkills = useCallback(async () => {
     setLoading(true)
@@ -245,7 +239,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
   }, [router])
 
   /**
-   * 加载 Skill 上传审核列表。
+   * 加载当前用户的 Skill 上传审核列表。
    * 作用：调用 /api/backend/skills/reviews；管理员看到全部待审核项，
    * 普通用户只看到自己提交的待审核项。
    */
@@ -264,31 +258,10 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
     }
   }, [router])
 
-  /**
-   * 加载当前用户的审核结果通知。
-   * 作用：调用 /api/backend/skills/notices；审核通过/拒绝后展示，
-   * 用户点击「取消通知」后永久移除。
-   */
-  const loadNotices = useCallback(async () => {
-    try {
-      const res = await fetch("/api/backend/skills/notices")
-      if (res.status === 401) {
-        router.push("/login")
-        return
-      }
-      const data = await res.json()
-      if (!data.ok) throw new Error(data.error || "获取通知失败")
-      setNotices(data.data || [])
-    } catch (err) {
-      console.error("[Skill管理] 获取通知失败:", err)
-    }
-  }, [router])
-
   useEffect(() => {
     loadSkills()
     loadReviews()
-    loadNotices()
-  }, [loadSkills, loadReviews, loadNotices])
+  }, [loadSkills, loadReviews])
 
   /**
    * 上传新 Skill。
@@ -368,7 +341,6 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
       setShowUpload(false)
       await loadReviews()
       await loadSkills()
-      await loadNotices()
     } catch (err) {
       console.error("[Skill管理] 上传失败:", err)
       toast.error("上传失败", { description: String(err) })
@@ -440,29 +412,6 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
       toast.error("撤销失败", { description: String(err) })
     } finally {
       setReviewingId("")
-    }
-  }
-
-  /**
-   * 取消（读过）审核结果通知。
-   * 作用：调用 POST /api/backend/skills/notices/<id>/dismiss，
-   * 该通知将被永久移除，之后不再发送。
-   */
-  async function handleDismissNotice(notice: NoticeItem) {
-    setDismissingId(notice.id)
-    try {
-      const res = await fetch(`/api/backend/skills/notices/${notice.id}/dismiss`, {
-        method: "POST",
-      })
-      const data = await res.json()
-      if (!data.ok) throw new Error(data.error || "取消通知失败")
-      toast.success("已取消通知", { description: "该通知已移除，之后不再发送" })
-      await loadNotices()
-    } catch (err) {
-      console.error("[Skill管理] 取消通知失败:", err)
-      toast.error("取消通知失败", { description: String(err) })
-    } finally {
-      setDismissingId("")
     }
   }
 
@@ -657,101 +606,35 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
     }
   }
 
-  /**
-   * 退出登录。
-   * 作用：调用 /api/auth/logout 清除服务端会话和 Cookie，回到登录页。
-   */
-  async function handleLogout() {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" })
-      console.log("[Skill管理] 已退出登录")
-    } catch (err) {
-      console.error("[Skill管理] 退出登录失败:", err)
-    }
-    router.push("/login")
-  }
+  // ---------- 派生数据 ----------
+  // 主表格：管理员看全部 Skill，普通用户只看自己（owner=username）的
+  const tableSkills = isAdmin ? skills : skills.filter((s) => s.owner === username)
+  // 全部 Skill 缩略图：所有用户可见全部，按关键字过滤（名称/类型/所有者/描述）
+  const kw = thumbKeyword.trim().toLowerCase()
+  const thumbSkills = kw
+    ? skills.filter(
+        (s) =>
+          s.skillName.toLowerCase().includes(kw) ||
+          s.skillType.toLowerCase().includes(kw) ||
+          (s.owner || "").toLowerCase().includes(kw) ||
+          (s.description || "").toLowerCase().includes(kw)
+      )
+    : skills
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-8">
-      {/* ========== 页面标题 + 导航 ========== */}
-      <header className="mb-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium text-muted-foreground">Skill 管理</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">Skill 管理</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link href="/" className={buttonVariants({ variant: "ghost", size: "sm" })}>
-              首页
-            </Link>
-            <Link href="/tasks" className={buttonVariants({ variant: "ghost", size: "sm" })}>
-              任务
-            </Link>
-            {/* 审核结果通知铃铛 */}
-            <div className="relative">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setShowNotices((v) => !v)}
-                aria-label="审核通知"
-                className="relative"
-              >
-                <Bell className="size-4" />
-                {notices.length > 0 && (
-                  <span className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-destructive text-[10px] font-semibold text-white">
-                    {notices.length > 9 ? "9+" : notices.length}
-                  </span>
-                )}
-              </Button>
-              {/* 通知下拉列表 */}
-              {showNotices && (
-                <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-xl border border-border bg-card shadow-lg">
-                  <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                    <p className="text-sm font-medium">审核通知</p>
-                    <Button variant="ghost" size="icon-sm" onClick={() => setShowNotices(false)} aria-label="关闭通知">
-                      <X className="size-4" />
-                    </Button>
-                  </div>
-                  <div className="max-h-80 overflow-auto p-2">
-                    {notices.length === 0 ? (
-                      <p className="px-2 py-4 text-center text-xs text-muted-foreground">暂无通知</p>
-                    ) : (
-                      notices.map((n) => (
-                        <div
-                          key={n.id}
-                          className="mb-1.5 flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-2.5 py-2 last:mb-0"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs leading-relaxed text-foreground">{n.message}</p>
-                            <p className="mt-0.5 text-[11px] text-muted-foreground">{n.createdAt}</p>
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="shrink-0"
-                            disabled={dismissingId === n.id}
-                            onClick={() => handleDismissNotice(n)}
-                          >
-                            {dismissingId === n.id && <Loader2 className="size-3 animate-spin" />}
-                            取消通知
-                          </Button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-            <Button variant="ghost" size="sm" onClick={handleLogout}>
-              <LogOut className="size-4" />
-              退出登录
-            </Button>
-          </div>
-        </div>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          管理 Skill 资源：上传 zip 压缩包或文件夹（上传后需管理员审核通过方可使用）、预览文件内容、删除、设置所有者。所有用户都能查看全部 Skill。
-        </p>
-      </header>
+    <div>
+      {/* 统一顶部导航栏 */}
+      <AppNavbar username={username} isAdmin={isAdmin} />
+
+      <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-8">
+        {/* ========== 页面标题（审核通知已统一收拢到顶部导航栏通知中心） ========== */}
+        <header className="mb-6">
+          <p className="text-sm font-medium text-muted-foreground">Skill 管理</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">Skill 管理</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+            管理 Skill 资源：上传 zip 压缩包或文件夹（上传后需管理员审核通过方可使用）、预览文件内容、删除、设置所有者。主列表只显示您名下的 Skill（管理员可查看全部），页面顶部「全部 Skill」缩略图对所有用户可见。
+          </p>
+        </header>
 
       {/* ========== 使用说明 ========== */}
       <div className="mb-6 rounded-xl border border-border bg-muted/40 p-4 text-sm leading-relaxed text-muted-foreground">
@@ -759,11 +642,72 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
         <ul className="list-inside list-disc space-y-1">
           <li>上传：点击左侧「上传新 Skill」，选择 zip 压缩包或一个文件夹（文件夹需包含 SKILL.md）。系统会读取 SKILL.md 中的 name 字段作为 Skill 名称，上传后需管理员审核，审核通过后方可使用；若已存在同名 Skill，会弹出二次确认，确认后需等待管理员审核通过才会覆盖原 Skill。</li>
           <li>预览：在列表点击「预览」，左侧为文件树、右侧查看选中的文件内容。</li>
-          <li>审核：审核通过前，上传者可在「上传审核」区域点击「撤销」撤回本次上传（暂存内容将被丢弃）；管理员审核通过/拒绝后，右上角通知栏会收到结果通知，可点击「取消通知」将其移除（之后不再发送）。</li>
+          <li>审核：审核通过前，上传者可在「上传审核」区域点击「撤销」撤回本次上传（暂存内容将被丢弃）；管理员审核通过/拒绝后，顶部导航栏「通知中心」铃铛会收到结果通知，可点击「取消通知」将其移除（之后不再发送）。</li>
           <li>删除：仅管理员可以删除 Skill，普通用户不提供删除功能（删除不可恢复）。</li>
           <li>设置所有者：仅管理员可以设置/修改 Skill 的所有者。</li>
-          <li>Skill 列表：侧边栏会对所有用户显示全部 Skill；上传新 Skill 前，请先查看已有 Skill 的 description，确认其中没有包含您要上传的 Skill 的触发条件，再上传 Skill。</li>
+          <li>Skill 列表：下方表格只显示所有者为您本人的 Skill（管理员显示全部）；上传新 Skill 前，请在顶部「全部 Skill」中搜索关键描述，确认已有 Skill 不包含您要上传的触发条件，再上传。</li>
         </ul>
+      </div>
+
+      {/* ========== 全部 Skill 缩略图（所有用户可见全部，可搜索、可折叠） ========== */}
+      <div className="mb-6 rounded-xl border border-border bg-card">
+        <button
+          type="button"
+          onClick={() => setThumbExpanded((v) => !v)}
+          className="flex w-full items-center gap-2 px-4 py-3 text-left"
+          aria-expanded={thumbExpanded}
+        >
+          {thumbExpanded ? (
+            <ChevronDown className="size-4 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="size-4 text-muted-foreground" />
+          )}
+          <span className="text-sm font-medium">全部 Skill 缩略图</span>
+          <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-xs">
+            {skills.length}
+          </span>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {thumbExpanded ? "点击折叠" : "点击展开"}
+          </span>
+        </button>
+        {thumbExpanded && (
+          <div className="border-t border-border p-4">
+            <div className="relative mb-3">
+              <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="pl-8"
+                placeholder="搜索 Skill 的名称 / 描述 / 类型 / 所有者…"
+                value={thumbKeyword}
+                onChange={(e) => setThumbKeyword(e.target.value)}
+              />
+            </div>
+            {thumbSkills.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {kw ? "未找到匹配的 Skill" : "暂无 Skill"}
+              </p>
+            ) : (
+              <div className="max-h-72 space-y-2 overflow-auto">
+                {thumbSkills.map((s) => (
+                  <div
+                    key={s.skillPath}
+                    className="rounded-lg border border-border bg-muted/30 px-3 py-2"
+                  >
+                    <div className="flex flex-wrap items-baseline gap-2">
+                      <span className="font-mono text-sm font-medium">{s.skillName}</span>
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        {s.skillType}
+                      </span>
+                      {s.owner && <span className="text-xs text-muted-foreground">@{s.owner}</span>}
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {s.description || "-"}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col gap-6 lg:flex-row">
@@ -781,36 +725,6 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
               <Upload className="size-4" />
               上传新 Skill
             </Button>
-
-            {/* Skill 列表（对所有用户显示全部 Skill，名称 + description 可折叠） */}
-            <div className="mt-4">
-              <p className="mb-1 flex items-center gap-2 text-sm font-medium">
-                <FolderTree className="size-4 text-muted-foreground" />
-                Skill 列表
-              </p>
-              <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
-                对所有用户显示全部 Skill。上传新 Skill 前，请先检查已有 Skill 的 description 是否已包含您要上传的 Skill 的触发条件，确认不重复再上传。
-              </p>
-              <div className="space-y-1.5">
-                {skills.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">暂无 Skill</p>
-                ) : (
-                  skills.map((s) => (
-                    <details
-                      key={s.skillPath}
-                      className="group rounded-lg border border-border bg-muted/30 px-2.5 py-1.5"
-                    >
-                      <summary className="cursor-pointer list-none text-sm font-medium hover:text-foreground">
-                        {s.skillName}
-                      </summary>
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                        {s.description || "-"}
-                      </p>
-                    </details>
-                  ))
-                )}
-              </div>
-            </div>
           </div>
 
           {/* 当前登录用户信息 */}
@@ -820,7 +734,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
               {username}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {isAdmin ? "管理员 · 可管理全部 Skill" : "普通用户 · 可查看全部 Skill"}
+              {isAdmin ? "管理员 · 可管理全部 Skill" : "普通用户 · 可查看全部 Skill 缩略图"}
             </p>
           </div>
         </aside>
@@ -922,7 +836,8 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
           {/* 工具条：总条数 + 刷新按钮 */}
           <div className="mb-3 flex items-center justify-between">
             <p className="text-sm text-muted-foreground">
-              共 <span className="font-mono font-medium text-foreground">{skills.length}</span> 个 Skill
+              共 <span className="font-mono font-medium text-foreground">{tableSkills.length}</span> 个 Skill
+              {!isAdmin && <span className="ml-1">（我的）</span>}
             </p>
             <Button variant="outline" size="sm" onClick={loadSkills} disabled={loading}>
               {loading ? <Loader2 className="size-4 animate-spin" /> : <FileSpreadsheet className="size-4" />}
@@ -943,14 +858,14 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {skills.length === 0 && !loading && (
+                {tableSkills.length === 0 && !loading && (
                   <TableRow>
                     <TableCell colSpan={5} className="py-16 text-center text-muted-foreground">
-                      暂无 Skill，点击左侧「上传新 Skill」添加
+                      {isAdmin ? "暂无 Skill，点击左侧「上传新 Skill」添加" : "您名下暂无 Skill，点击左侧「上传新 Skill」添加"}
                     </TableCell>
                   </TableRow>
                 )}
-                {skills.map((skill) => (
+                {tableSkills.map((skill) => (
                   <TableRow key={skill.skillPath} className="align-top">
                     <TableCell className="font-mono text-sm font-medium">
                       {skill.skillName}
@@ -1336,6 +1251,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

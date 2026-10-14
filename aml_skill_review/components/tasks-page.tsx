@@ -13,21 +13,22 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
   Activity,
   Bookmark,
+  Check,
   Clock,
   Download,
   FileText,
   Loader2,
-  LogOut,
   Play,
   Settings,
+  ShieldCheck,
   Square,
   Trash2,
+  X,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -49,11 +50,12 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
+import { AppNavbar } from "@/components/app-navbar"
 
 // ---------- 类型定义 ----------
 
 /** 任务状态 */
-type TaskStatus = "queued" | "running" | "completed" | "failed" | "stopped"
+type TaskStatus = "pending" | "queued" | "running" | "completed" | "failed" | "stopped" | "rejected"
 
 /** 任务信息（与后端 TaskInfo 对应） */
 type TaskInfo = {
@@ -125,17 +127,45 @@ type ScheduledTask = {
   maxIssues: number
   runAt: string
   createdAt: string
+  review: string
+}
+
+/** 管理员待审核的立即执行任务（status="pending" 的 run） */
+type ApprovalRun = {
+  id: string
+  name: string
+  owner: string
+  skill: string
+  skillOwner: string
+  jql: string
+  email: string
+  maxIssues: number
+  createdAt: string
+}
+
+/** 管理员待审核的指定时间任务（review=="pending" 的 once 定义） */
+type ApprovalDef = {
+  id: string
+  name: string
+  owner: string
+  skill: string
+  jql: string
+  email: string
+  runAt: string
+  createdAt: string
 }
 
 // ---------- 状态徽章配色 ----------
 
 /** 状态 → 中文文案 + 背景色 */
 const STATUS_META: Record<TaskStatus, { label: string; className: string }> = {
+  pending: { label: "待审核", className: "bg-amber-500 text-white" },
   queued: { label: "排队中", className: "bg-yellow-500 text-white" },
   running: { label: "运行中", className: "bg-blue-500 text-white" },
   completed: { label: "已完成", className: "bg-green-500 text-white" },
   failed: { label: "失败", className: "bg-red-500 text-white" },
   stopped: { label: "已停止", className: "bg-gray-500 text-white" },
+  rejected: { label: "已拒绝", className: "bg-rose-600 text-white" },
 }
 
 // ============================================================
@@ -185,6 +215,13 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([])
   const [loadingScheduled, setLoadingScheduled] = useState(true)
   const [deletingScheduledId, setDeletingScheduledId] = useState("")
+
+  // ---------- 管理员：待审核任务 ----------
+  const [pendingRuns, setPendingRuns] = useState<ApprovalRun[]>([])
+  const [pendingDefs, setPendingDefs] = useState<ApprovalDef[]>([])
+  const [loadingApprovals, setLoadingApprovals] = useState(true)
+  // 当前正在审核的标识（kind:run|def + id）
+  const [reviewingKey, setReviewingKey] = useState("")
 
   // ---------- 日志查看弹窗 ----------
   const [logTask, setLogTask] = useState<TaskInfo | null>(null)
@@ -248,11 +285,11 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
 
   /**
    * 加载 skill 列表。
-   * 作用：调用 /api/backend/skills 获取当前用户可选的 skill，用于新建任务下拉。
+   * 作用：调用 /api/backend/skills?mine=1 获取当前用户可选的 skill（普通用户只能选自己负责的），用于新建任务下拉。
    */
   const loadSkills = useCallback(async () => {
     try {
-      const res = await fetch("/api/backend/skills")
+      const res = await fetch("/api/backend/skills?mine=1")
       if (res.status === 401) {
         router.push("/login")
         return
@@ -312,6 +349,25 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   }, [router])
 
   /**
+   * 管理员加载待审核任务。
+   * 作用：调用 /api/backend/approvals 获取普通用户提交、等待审批的立即执行任务与指定时间任务。
+   */
+  const loadApprovals = useCallback(async () => {
+    if (!isAdmin) return
+    try {
+      const res = await fetch("/api/backend/approvals")
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "获取待审核任务失败")
+      setPendingRuns(data.runs || [])
+      setPendingDefs(data.defs || [])
+    } catch (err) {
+      console.error("[任务页] 获取待审核任务失败:", err)
+    } finally {
+      setLoadingApprovals(false)
+    }
+  }, [isAdmin])
+
+  /**
    * 管理员加载最大并发配置。
    * 作用：调用 /api/backend/admin/task-config 获取当前最大并发任务数。
    */
@@ -335,7 +391,8 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
     loadAdminConfig()
     loadPresets()
     loadScheduled()
-  }, [loadTasks, loadStats, loadSkills, loadAdminConfig, loadPresets, loadScheduled])
+    loadApprovals()
+  }, [loadTasks, loadStats, loadSkills, loadAdminConfig, loadPresets, loadScheduled, loadApprovals])
 
   // ---------- 自动刷新：存在 queued / running 任务时每 5 秒轮询 ----------
   const hasActive = tasks.some((t) => t.status === "queued" || t.status === "running")
@@ -434,11 +491,23 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || "创建任务失败")
       if (formMode === "immediate") {
-        toast.success("任务已创建", {
-          description: `${name} → ${data.task.status === "running" ? "已开始运行" : "已加入队列"}`,
-        })
+        if (isAdmin) {
+          toast.success("任务已创建", {
+            description: `${name} → ${data.task.status === "running" ? "已开始运行" : "已加入队列"}`,
+          })
+        } else {
+          toast.success("任务已提交审核", {
+            description: `${name} → 已提交，等待管理员审批后执行`,
+          })
+        }
       } else {
-        toast.success("定时任务已创建", { description: `${name} → ${runAt} 执行` })
+        if (isAdmin) {
+          toast.success("定时任务已创建", { description: `${name} → ${runAt} 执行` })
+        } else {
+          toast.success("已提交审核", {
+            description: `${name} → ${runAt} 执行，等待管理员批准`,
+          })
+        }
       }
       // 清空表单并刷新
       setFormName("")
@@ -645,18 +714,32 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   }
 
   /**
-   * 退出登录。
-   * 作用：调用 /api/auth/logout 清除会话，回到登录页。
+   * 管理员审核待审核任务（通过 / 拒绝）。
+   * 作用：调用 /api/backend/approvals 对应端点，成功后刷新待审核列表、任务列表与计划任务。
    */
-  async function handleLogout() {
+  async function handleReview(kind: "run" | "def", id: string, accept: boolean) {
+    const key = `${kind}:${id}`
+    setReviewingKey(key)
     try {
-      await fetch("/api/auth/logout", { method: "POST" })
-      console.log("[任务页] 已退出登录")
+      const res = await fetch(
+        `/api/backend/approvals/${kind}/${encodeURIComponent(id)}/${accept ? "accept" : "reject"}`,
+        { method: "POST" }
+      )
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "审核失败")
+      toast.success(accept ? "已通过审核" : "已拒绝执行")
+      await Promise.all([loadApprovals(), loadTasks(), loadStats(), loadScheduled()])
     } catch (err) {
-      console.error("[任务页] 退出登录失败:", err)
+      console.error("[任务页] 审核任务失败:", err)
+      toast.error("审核失败", { description: String(err) })
+    } finally {
+      setReviewingKey("")
     }
-    router.push("/login")
   }
+
+  /**
+   * 退出登录已统一放在顶部导航栏（AppNavbar）中。
+   */
 
   // ---------- 渲染辅助 ----------
 
@@ -686,26 +769,9 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   // 页面渲染
   // ============================================================
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-8">
-      {/* 顶部导航 */}
-      <div className="mb-6 flex items-center justify-between gap-3">
-        <nav className="flex items-center gap-1">
-          <Link href="/" className={buttonVariants({ variant: "ghost", size: "sm" })}>
-            首页
-          </Link>
-          <Link href="/skills" className={buttonVariants({ variant: "ghost", size: "sm" })}>
-            Skill 管理
-          </Link>
-          <Link href="/tasks" className={buttonVariants({ variant: "ghost", size: "sm" })}>
-            任务管理
-          </Link>
-        </nav>
-        <Button variant="ghost" size="sm" onClick={handleLogout}>
-          <LogOut className="size-4" />
-          退出登录
-        </Button>
-      </div>
-
+    <div>
+      <AppNavbar username={username} isAdmin={isAdmin} />
+      <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-8">
       {/* 页面标题 */}
       <header className="mb-6">
         <p className="text-sm font-medium text-muted-foreground">质量分析</p>
@@ -796,6 +862,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
           填写任务名称、选择 Skill（名称取自各 skill.md 的 name 字段）、输入 JQL、最大处理条数与通知邮箱；触发方式支持「立即执行」和「指定时间」。
+          {!isAdmin && " 普通用户提交的任务需管理员审核通过后才会执行。"}
         </p>
         {/* 配置模板：保存当前配置 / 选择已保存配置加载或删除 */}
         <div className="mt-4 flex flex-wrap items-end gap-3 rounded-lg border border-dashed border-border p-3">
@@ -945,7 +1012,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
         <div className="mt-4 flex justify-end">
           <Button onClick={handleCreate} disabled={creating}>
             {creating ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-            {formMode === "immediate" ? "创建并执行" : "创建计划"}
+            {isAdmin ? (formMode === "immediate" ? "创建并执行" : "创建计划") : "提交审核"}
           </Button>
         </div>
       </div>
@@ -962,7 +1029,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
           </p>
         </div>
         <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          展示尚未执行的定时任务明细（任务名称、Skill、执行时间、创建时间），可点击「删除」取消该计划。
+          展示尚未执行的定时任务明细（任务名称、Skill、执行时间、创建时间、状态），可点击「删除」取消该计划。普通用户创建的计划需管理员审核通过后才会执行。
         </p>
         {scheduledTasks.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted-foreground">
@@ -976,6 +1043,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                 <TableHead className="w-[120px]">Skill</TableHead>
                 <TableHead className="w-[180px]">执行时间</TableHead>
                 <TableHead className="w-[160px]">创建时间</TableHead>
+                <TableHead className="w-[90px]">状态</TableHead>
                 <TableHead className="w-[100px] text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -994,6 +1062,13 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                   <TableCell className="text-sm">{st.skill || "-"}</TableCell>
                   <TableCell className="font-mono text-xs text-foreground">{st.runAt || "-"}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{st.createdAt || "-"}</TableCell>
+                  <TableCell>
+                    {st.review === "pending" ? (
+                      <Badge className="bg-amber-500 text-white">待审核</Badge>
+                    ) : (
+                      <Badge className="bg-green-600 text-white">已通过</Badge>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">
                     <Button
                       size="sm"
@@ -1016,6 +1091,169 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
         )}
       </div>
 
+      {/* ========== 待审核任务（仅管理员） ========== */}
+      {isAdmin && (
+        <div className="mb-6 rounded-xl border border-border bg-card">
+          <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+            <ShieldCheck className="size-4 text-muted-foreground" />
+            <p className="text-sm font-medium">待审核任务</p>
+            <span className="text-xs text-muted-foreground">
+              普通用户提交的任务需审核通过后才执行
+            </span>
+          </div>
+          {loadingApprovals ? (
+            <p className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> 加载中…
+            </p>
+          ) : pendingRuns.length === 0 && pendingDefs.length === 0 ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">暂无待审核任务</p>
+          ) : (
+            <>
+              {pendingRuns.length > 0 && (
+                <div className="border-b border-border">
+                  <p className="border-b border-border bg-muted/40 px-4 py-2 text-xs font-medium text-muted-foreground">
+                    立即执行任务（{pendingRuns.length}）
+                  </p>
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/90 hover:bg-muted/90">
+                        <TableHead className="min-w-[140px]">任务名称</TableHead>
+                        <TableHead className="w-[120px]">Skill</TableHead>
+                        <TableHead className="w-[100px]">Skill Owner</TableHead>
+                        <TableHead className="min-w-[160px]">JQL</TableHead>
+                        <TableHead className="w-[90px]">提交人</TableHead>
+                        <TableHead className="w-[150px]">提交时间</TableHead>
+                        <TableHead className="w-[130px] text-right">操作</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {pendingRuns.map((r) => (
+                        <TableRow key={r.id} className="align-middle">
+                          <TableCell>
+                            <p className="line-clamp-1 text-sm font-medium">{r.name || "-"}</p>
+                            {r.email && (
+                              <p className="line-clamp-1 text-xs text-muted-foreground">{r.email}</p>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-sm">{r.skill || "-"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {r.skillOwner || "-"}
+                          </TableCell>
+                          <TableCell className="max-w-[260px]">
+                            <p className="line-clamp-1 font-mono text-xs text-muted-foreground">{r.jql}</p>
+                          </TableCell>
+                          <TableCell className="text-sm">{r.owner || "-"}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{r.createdAt || "-"}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-green-600 text-green-600 hover:bg-green-600 hover:text-white"
+                                disabled={reviewingKey !== ""}
+                                onClick={() => handleReview("run", r.id, true)}
+                              >
+                                {reviewingKey === `run:${r.id}` ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <Check className="size-3.5" />
+                                )}
+                                通过
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-destructive text-destructive hover:bg-destructive hover:text-white"
+                                disabled={reviewingKey !== ""}
+                                onClick={() => handleReview("run", r.id, false)}
+                              >
+                                {reviewingKey === `run:${r.id}` ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <X className="size-3.5" />
+                                )}
+                                拒绝
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+              {pendingDefs.length > 0 && (
+                <div>
+                  <p className="border-b border-border bg-muted/40 px-4 py-2 text-xs font-medium text-muted-foreground">
+                    指定时间任务（{pendingDefs.length}）
+                  </p>
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/90 hover:bg-muted/90">
+                        <TableHead className="min-w-[140px]">任务名称</TableHead>
+                        <TableHead className="w-[120px]">Skill</TableHead>
+                        <TableHead className="w-[160px]">执行时间</TableHead>
+                        <TableHead className="w-[90px]">提交人</TableHead>
+                        <TableHead className="w-[150px]">提交时间</TableHead>
+                        <TableHead className="w-[130px] text-right">操作</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {pendingDefs.map((d) => (
+                        <TableRow key={d.id} className="align-middle">
+                          <TableCell>
+                            <p className="line-clamp-1 text-sm font-medium">{d.name || "-"}</p>
+                            {d.email && (
+                              <p className="line-clamp-1 text-xs text-muted-foreground">{d.email}</p>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-sm">{d.skill || "-"}</TableCell>
+                          <TableCell className="font-mono text-xs text-foreground">{d.runAt || "-"}</TableCell>
+                          <TableCell className="text-sm">{d.owner || "-"}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{d.createdAt || "-"}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-green-600 text-green-600 hover:bg-green-600 hover:text-white"
+                                disabled={reviewingKey !== ""}
+                                onClick={() => handleReview("def", d.id, true)}
+                              >
+                                {reviewingKey === `def:${d.id}` ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <Check className="size-3.5" />
+                                )}
+                                通过
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-destructive text-destructive hover:bg-destructive hover:text-white"
+                                disabled={reviewingKey !== ""}
+                                onClick={() => handleReview("def", d.id, false)}
+                              >
+                                {reviewingKey === `def:${d.id}` ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <X className="size-3.5" />
+                                )}
+                                拒绝
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {/* ========== 任务列表 ========== */}
       <div className="rounded-xl border border-border bg-card">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -1034,7 +1272,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
         </p>
         {/* 筛选栏：Skill / 上传者(管理员) / 日期范围 */}
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
-          <Select value={filterSkill} onValueChange={(v) => { setFilterSkill(v); setPage(1) }}>
+          <Select value={filterSkill} onValueChange={(v) => { setFilterSkill(String(v ?? "")); setPage(1) }}>
             <SelectTrigger className="w-[180px]"><SelectValue placeholder="全部 Skill" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部 Skill</SelectItem>
@@ -1044,7 +1282,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
             </SelectContent>
           </Select>
           {isAdmin && (
-            <Select value={filterOwner} onValueChange={(v) => { setFilterOwner(v); setPage(1) }}>
+            <Select value={filterOwner} onValueChange={(v) => { setFilterOwner(String(v ?? "")); setPage(1) }}>
               <SelectTrigger className="w-[160px]"><SelectValue placeholder="全部上传者" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部上传者</SelectItem>
@@ -1292,6 +1530,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

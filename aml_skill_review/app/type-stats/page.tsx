@@ -18,5 +18,11 @@ export default async function Page({
   if (!user) redirect("/login")
   // 2. 管理员查看其他用户的对比时带上 user 参数
   const sp = await searchParams
-  return <TypeStatsPage dataUser={sp.user || ""} />
+  return (
+    <TypeStatsPage
+      dataUser={sp.user || ""}
+      username={user.username}
+      isAdmin={user.is_admin === 1}
+    />
+  )
 }

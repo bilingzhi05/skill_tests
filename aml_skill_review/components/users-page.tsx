@@ -9,12 +9,12 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import Link from "next/link"
 import { toast } from "sonner"
-import { ArrowLeft, Loader2, Save, UserPlus } from "lucide-react"
+import { Loader2, Save, UserPlus } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { Button, buttonVariants } from "@/components/ui/button"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { AppNavbar } from "@/components/app-navbar"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -34,7 +34,7 @@ type UserItem = {
   create_t: string
 }
 
-export function UsersPage() {
+export function UsersPage({ username, isAdmin }: { username: string; isAdmin: boolean }) {
   // ---------- 页面状态 ----------
   const [users, setUsers] = useState<UserItem[]>([]) // 全部账号
   const [loading, setLoading] = useState(true) // 正在加载
@@ -134,16 +134,9 @@ export function UsersPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-8 md:px-8">
-      {/* 顶部导航 */}
-      <div className="mb-6 flex items-center justify-between gap-3">
-        <Link href="/" className={buttonVariants({ variant: "ghost", size: "sm", className: "-ml-2" })}>
-          <ArrowLeft className="size-4" />
-          返回列表
-        </Link>
-        <span className="text-sm text-muted-foreground">仅管理员可见</span>
-      </div>
-
+    <div>
+      <AppNavbar username={username} isAdmin={isAdmin} />
+      <div className="mx-auto w-full max-w-5xl px-4 py-8 md:px-8">
       <header className="mb-8">
         <p className="text-sm font-medium text-muted-foreground">账号管理</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">用户管理</h1>
@@ -255,6 +248,7 @@ export function UsersPage() {
             )}
           </CardContent>
         </Card>
+      </div>
       </div>
     </div>
   )

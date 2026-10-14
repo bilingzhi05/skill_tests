@@ -146,10 +146,37 @@ def _to_camel(skill_path: str) -> dict[str, Any]:
     }
 
 
-def list_skills(viewer: str, is_admin: bool) -> list[dict[str, Any]]:
-    # 所有用户都可见全部 Skill（便于在上传前检查已有 description 触发条件）
-    _ = viewer, is_admin
-    return [_to_camel(sp) for sp in scan_skill_dirs()]
+def list_skills(viewer: str, is_admin: bool, mine: bool = False) -> list[dict[str, Any]]:
+    """列出 Skill。
+
+    - mine=False：所有用户都可见全部 Skill（便于在上传前检查已有 description 触发条件）；
+    - mine=True 且非管理员：只返回 owner 为当前用户的 Skill（新建任务下拉只显示自己负责的）。
+    """
+    items = [_to_camel(sp) for sp in scan_skill_dirs()]
+    if mine and not is_admin:
+        items = [info for info in items if info.get("owner") == viewer]
+    return items
+
+
+def assert_skill_accessible(skill_identifier: str, username: str, is_admin: bool) -> bool:
+    """校验用户能否使用某个 Skill（按 skillName 或 skillPath 双标识匹配）。
+
+    管理员可访问全部；普通用户仅当该 Skill 存在且 owner 为自己时可访问。
+    空标识（部分任务未挂 Skill）视为可访问。
+    """
+    ident = (skill_identifier or "").strip()
+    if not ident or is_admin:
+        return True
+    target = ident.lower()
+    for sp in scan_skill_dirs():
+        info = _to_camel(sp)
+        candidates = (
+            str(info.get("skillName") or "").lower(),
+            str(info.get("skillPath") or "").lower(),
+        )
+        if target in candidates:
+            return str(info.get("owner") or "").strip() == username
+    return False
 
 
 def get_skill_detail(skill_path: str, viewer: str, is_admin: bool) -> dict[str, Any] | None:

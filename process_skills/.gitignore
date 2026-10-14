@@ -1,0 +1,10 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 运行时数据（任务状态 / 通知 / 审核暂存 / 运行输出 / API Token，不入库）
+server_data/
+tmp/
+
+# 日志
+*.log

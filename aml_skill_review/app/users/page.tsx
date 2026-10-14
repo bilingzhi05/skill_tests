@@ -14,5 +14,5 @@ export default async function Page() {
   if (!user) redirect("/login")
   // 2. 普通用户不能访问用户管理页
   if (user.is_admin !== 1) redirect("/")
-  return <UsersPage />
+  return <UsersPage username={user.username} isAdmin={user.is_admin === 1} />
 }

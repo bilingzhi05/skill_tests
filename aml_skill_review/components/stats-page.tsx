@@ -25,6 +25,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { VerdictBadge } from "@/components/verdict-badge"
+import { AppNavbar } from "@/components/app-navbar"
 import { formatPercent, VERDICT_CATEGORIES, type StatsResult } from "@/lib/stats"
 
 /** 四类判定的定义说明（显示在概览卡片下方） */
@@ -47,7 +48,17 @@ const CATEGORY_DOT: Record<string, string> = {
   未知: "bg-slate-400",
 }
 
-export function StatsPage({ table, dataUser = "" }: { table: string; dataUser?: string }) {
+export function StatsPage({
+  table,
+  dataUser = "",
+  username,
+  isAdmin,
+}: {
+  table: string
+  dataUser?: string
+  username: string
+  isAdmin: boolean
+}) {
   const [stats, setStats] = useState<StatsResult | null>(null) // 统计数据
   const [loading, setLoading] = useState(true) // 正在加载
   const [loadError, setLoadError] = useState("") // 加载失败原因
@@ -96,7 +107,7 @@ export function StatsPage({ table, dataUser = "" }: { table: string; dataUser?: 
       <div className="mx-auto max-w-md py-24 text-center">
         <p className="text-lg font-medium">无法显示统计</p>
         <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
-        <Link href="/" className={buttonVariants({ variant: "outline", className: "mt-6" })}>
+        <Link href="/analysis" className={buttonVariants({ variant: "outline", className: "mt-6" })}>
           <ArrowLeft className="size-4" />
           返回列表
         </Link>
@@ -105,15 +116,10 @@ export function StatsPage({ table, dataUser = "" }: { table: string; dataUser?: 
   }
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-8">
-      {/* 顶部导航 */}
-      <div className="mb-6 flex items-center justify-between gap-3">
-        <Link href="/" className={buttonVariants({ variant: "ghost", size: "sm", className: "-ml-2" })}>
-          <ArrowLeft className="size-4" />
-          返回列表
-        </Link>
-        <span className="text-sm text-muted-foreground">当前数据表：{table}</span>
-      </div>
+    <div>
+      <AppNavbar username={username} isAdmin={isAdmin} />
+      <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-8">
+        <div className="mb-6 text-sm text-muted-foreground">当前数据表：{table}</div>
 
       <header className="mb-8">
         <p className="text-sm font-medium text-muted-foreground">质量分析</p>
@@ -268,6 +274,7 @@ export function StatsPage({ table, dataUser = "" }: { table: string; dataUser?: 
             )}
           </CardContent>
         </Card>
+      </div>
       </div>
     </div>
   )

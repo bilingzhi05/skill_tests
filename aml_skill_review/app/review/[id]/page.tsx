@@ -31,6 +31,8 @@ export default async function Page({
       humanFilter={sp.h || ""}
       // 管理员评审其他用户的工单时，数据读写都走该用户的库
       dataUser={sp.user || ""}
+      username={user.username}
+      isAdmin={user.is_admin === 1}
     />
   )
 }

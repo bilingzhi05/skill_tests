@@ -15,8 +15,9 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import * as XLSX from "xlsx"
 import { toast } from "sonner"
-import { ArrowRight, BarChart3, Download, FileSpreadsheet, Loader2, LogOut, UserRound, Users, Wrench, Activity } from "lucide-react"
+import { ArrowRight, BarChart3, Download, FileSpreadsheet, Loader2, Users } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { AppNavbar } from "@/components/app-navbar"
 import {
   Select,
   SelectContent,
@@ -324,31 +325,25 @@ export function ListPage({ username, isAdmin }: { username: string; isAdmin: boo
   }
 
   /**
-   * 退出登录。
-   * 作用：调用 /api/auth/logout 清除服务端会话和 Cookie，回到登录页。
+   * 退出登录已统一放到顶部导航栏（AppNavbar）。
    */
-  async function handleLogout() {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" })
-      console.log("[列表页] 已退出登录")
-    } catch (err) {
-      console.error("[列表页] 退出登录失败:", err)
-    }
-    router.push("/login")
-  }
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-8">
-      {/* 页面标题 */}
-      <header className="mb-6">
-        <p className="text-sm font-medium text-muted-foreground">质量分析</p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">
-          Jira Skill 评审系统
-        </h1>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          在左侧选择 xlsx 文件自动导入，按条件过滤查看，点击「详情」进入评审页保存人工判定。
-        </p>
-      </header>
+    <div>
+      {/* 统一顶部导航栏 */}
+      <AppNavbar username={username} isAdmin={isAdmin} />
+
+      <div className="mx-auto w-full max-w-7xl px-4 py-8 md:px-8">
+        {/* 页面标题 */}
+        <header className="mb-6">
+          <p className="text-sm font-medium text-muted-foreground">质量分析</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">
+            Jira Skill 评审系统
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+            在左侧选择 xlsx 文件自动导入，按条件过滤查看，点击「详情」进入评审页保存人工判定。
+          </p>
+        </header>
 
       <div className="flex flex-col gap-6 lg:flex-row">
         {/* ========== 左侧侧边栏：文件选择 ========== */}
@@ -407,33 +402,6 @@ export function ListPage({ username, isAdmin }: { username: string; isAdmin: boo
             </div>
           </div>
 
-          {/* 同Skill结果对比全览（无需先选表） */}
-          <Link
-            href={`/type-stats${userParam ? `?user=${encodeURIComponent(userParam)}` : ""}`}
-            className={buttonVariants({ variant: "outline", className: "mt-4 w-full" })}
-          >
-            <BarChart3 className="size-4" />
-            同Skill结果对比全览
-          </Link>
-
-          {/* Skill 管理 */}
-          <Link
-            href="/skills"
-            className={buttonVariants({ variant: "outline", className: "mt-4 w-full" })}
-          >
-            <Wrench className="size-4" />
-            Skill 管理
-          </Link>
-
-          {/* 任务管理 */}
-          <Link
-            href="/tasks"
-            className={buttonVariants({ variant: "outline", className: "mt-4 w-full" })}
-          >
-            <Activity className="size-4" />
-            Skill 分析任务
-          </Link>
-
           {/* 跳转统计页（选中表后才可用） */}
           {table && (
             <Link
@@ -444,30 +412,6 @@ export function ListPage({ username, isAdmin }: { username: string; isAdmin: boo
               评审统计
             </Link>
           )}
-
-          {/* 当前登录用户信息 + 用户管理（管理员）+ 退出登录 */}
-          <div className="mt-4 rounded-xl border border-border bg-card p-4">
-            <p className="flex items-center gap-2 text-sm font-medium">
-              <UserRound className="size-4 text-muted-foreground" />
-              {username}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {isAdmin ? "管理员" : "普通用户"} · 只能看到自己文件夹的数据
-            </p>
-            {isAdmin && (
-              <Link
-                href="/users"
-                className={buttonVariants({ variant: "outline", className: "mt-3 w-full" })}
-              >
-                <Users className="size-4" />
-                用户管理
-              </Link>
-            )}
-            <Button variant="ghost" className="mt-2 w-full" onClick={handleLogout}>
-              <LogOut className="size-4" />
-              退出登录
-            </Button>
-          </div>
         </aside>
 
         {/* ========== 右侧主区域：过滤 + 列表 ========== */}
@@ -608,6 +552,7 @@ export function ListPage({ username, isAdmin }: { username: string; isAdmin: boo
             </p>
           )}
         </main>
+      </div>
       </div>
     </div>
   )

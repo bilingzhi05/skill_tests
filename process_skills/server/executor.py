@@ -30,7 +30,7 @@ _procs: dict[str, subprocess.Popen] = {}
 _procs_lock = threading.Lock()
 
 # 终端状态
-_DONE_STATUSES = {"completed", "failed", "stopped"}
+_DONE_STATUSES = {"completed", "failed", "stopped", "rejected"}
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -225,6 +225,8 @@ def _make_run(
     email: str,
     mode: str,
     task_id: str | None,
+    status: str = "queued",
+    skill_path: str = "",
 ) -> dict[str, Any]:
     run_id = storage.gen_task_id(skill)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -237,16 +239,16 @@ def _make_run(
         "name": name,
         "owner": owner,
         "skill": skill,
-        "skillPath": "",
+        "skillPath": skill_path,
         "jql": jql,
         "maxIssues": int(max_issues or 0),
         "email": email or "",
         "mode": mode,           # immediate | once | cron
         "taskId": task_id,      # 对应 yaml 定义 id（手动任务为 None）
-        "status": "queued",
+        "status": status,
         "progress": 0,
         "progressTotal": 0,
-        "progressMessage": "排队中",
+        "progressMessage": "待管理员审核" if status == "pending" else "排队中",
         "logPath": str(run_dir / "output.log"),
         "outputPath": str(run_dir / xlsx_name),
         "pid": None,
@@ -265,7 +267,14 @@ def enqueue_run(run: dict[str, Any]) -> dict[str, Any]:
     return run
 
 
-def create_immediate_run(params: dict[str, Any], owner: str) -> dict[str, Any]:
+def create_immediate_run(
+    params: dict[str, Any], owner: str, pending: bool = False
+) -> dict[str, Any]:
+    """创建立即执行任务。
+
+    pending=False 直接入队执行；pending=True 表示普通用户提交、等待管理员审核，
+    记录状态为 pending（调度线程不会派发）。
+    """
     run = _make_run(
         name=params.get("name") or "手动任务",
         owner=owner,
@@ -275,8 +284,59 @@ def create_immediate_run(params: dict[str, Any], owner: str) -> dict[str, Any]:
         email=params.get("email", ""),
         mode="immediate",
         task_id=None,
+        status="pending" if pending else "queued",
+        skill_path=str(params.get("skillPath") or ""),
     )
     return enqueue_run(run)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 审核（普通用户创建的待审核任务，管理员通过/拒绝）
+# ════════════════════════════════════════════════════════════════════════
+def list_pending_runs() -> list[dict[str, Any]]:
+    """管理员待审核：所有 status == "pending" 的运行记录（新建的在前）。"""
+    state = storage.load_state()
+    items = sorted(
+        (r for r in state["runs"].values() if r.get("status") == "pending"),
+        key=lambda r: r.get("createdAt", ""),
+        reverse=True,
+    )
+    owners_by_skill = _skill_owner_map()
+    return [
+        {
+            "id": r.get("id"),
+            "name": r.get("name"),
+            "owner": r.get("owner"),
+            "skill": r.get("skill"),
+            "skillOwner": owners_by_skill.get(str(r.get("skill", "")), ""),
+            "jql": r.get("jql"),
+            "email": r.get("email"),
+            "maxIssues": r.get("maxIssues"),
+            "createdAt": r.get("createdAt"),
+        }
+        for r in items
+    ]
+
+
+def set_run_review_status(run_id: str, status: str) -> bool:
+    """管理员审核运行任务：pending → queued（通过并入队）或 rejected（拒绝）。
+
+    返回是否成功（run 存在且原本处于 pending 状态）。
+    """
+    def _upd(state: dict[str, Any]) -> None:
+        r = state["runs"].get(run_id)
+        if not r or r.get("status") != "pending":
+            return
+        if status == "queued":
+            r["status"] = "queued"
+            r["progressMessage"] = "排队中"
+        elif status == "rejected":
+            r["status"] = "rejected"
+            r["progressMessage"] = "管理员拒绝执行"
+            r["finishedAt"] = storage.now_str()
+
+    storage.mutate_state(_upd)
+    return storage.load_state().get("runs", {}).get(run_id, {}).get("status") == status
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -616,6 +676,9 @@ def _due_cron_and_once_runs() -> list[dict[str, Any]]:
 
     for d in storage.load_task_defs():
         if not d.get("enabled", True):
+            continue
+        # 普通用户新建的一次性任务需先通过管理员审核（review=pending/rejected 不触发）
+        if d.get("review") in ("pending", "rejected"):
             continue
         task_id = d.get("id") or d.get("name")
         trigger = d.get("trigger", "cron" if d.get("cron") else "once")

@@ -26,6 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { VerdictBadge } from "@/components/verdict-badge"
+import { AppNavbar } from "@/components/app-navbar"
 import {
   formatPercent,
   VERDICT_CATEGORIES,
@@ -43,7 +44,15 @@ const CATEGORY_DOT: Record<string, string> = {
   未知: "bg-slate-400",
 }
 
-export function TypeStatsPage({ dataUser = "" }: { dataUser?: string }) {
+export function TypeStatsPage({
+  dataUser = "",
+  username,
+  isAdmin,
+}: {
+  dataUser?: string
+  username: string
+  isAdmin: boolean
+}) {
   const [typeGroups, setTypeGroups] = useState<TypeGroups>([])
   const [loading, setLoading] = useState(true) // 类型分组加载中
   const [loadError, setLoadError] = useState("")
@@ -131,7 +140,7 @@ export function TypeStatsPage({ dataUser = "" }: { dataUser?: string }) {
       <div className="mx-auto max-w-xl py-24 text-center">
         <p className="text-xl font-medium">无法显示对比全览</p>
         <p className="mt-2 text-base text-muted-foreground">{loadError}</p>
-        <Link href="/" className={buttonVariants({ variant: "outline", className: "mt-8" })}>
+        <Link href="/analysis" className={buttonVariants({ variant: "outline", className: "mt-8" })}>
           <ArrowLeft className="size-5" />
           返回列表
         </Link>
@@ -140,15 +149,9 @@ export function TypeStatsPage({ dataUser = "" }: { dataUser?: string }) {
   }
 
   return (
-    <div className="min-h-screen w-full px-6 py-8 lg:px-10">
-      {/* 顶部导航 */}
-      <div className="mb-6 flex items-center justify-between gap-3">
-        <Link href="/" className={buttonVariants({ variant: "ghost", size: "sm", className: "-ml-2" })}>
-          <ArrowLeft className="size-5" />
-          返回列表
-        </Link>
-        <span className="text-base text-muted-foreground">同Skill结果对比全览</span>
-      </div>
+    <div>
+      <AppNavbar username={username} isAdmin={isAdmin} />
+      <div className="min-h-screen w-full px-6 py-8 lg:px-10">
 
       <header className="mb-8">
         <h1 className="text-3xl font-semibold tracking-tight">同Skill结果对比全览</h1>
@@ -322,6 +325,7 @@ export function TypeStatsPage({ dataUser = "" }: { dataUser?: string }) {
           </Card>
         </div>
       ) : null}
+      </div>
     </div>
   )
 }

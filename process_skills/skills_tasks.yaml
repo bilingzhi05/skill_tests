@@ -17,24 +17,6 @@
 #       无需 crontab。
 # ============================================================
 tasks:
-- name: over_60round_BT
-  cron: 48 14 * * *
-  skill: analyze_bt_log
-  jql: key in (OTT-84222,TV-252209,TV-252366,TV-252686,TV-252094,TV-243794,OTT-100792)
-  email: lingzhi.bi@amlogic.com
-  max_issues: 1
-- id: tsk_1791516050709_d6a698
-  name: irdeto_cas_analysis
-  owner: minhong.yang
-  enabled: true
-  trigger: cron
-  cron: 30 11 * * *
-  run_at: null
-  skill: Irdeto_CAS_Issue_Analysis
-  jql: issuetype = Bug AND status = Closed AND "Root Cause" is not EMPTY AND "How to fix" is not EMPTY AND attachments is not EMPTY AND labels in (FAE-F-M-CAS-Nagra, FAE-A-M-CAS-Nagra) AND assignee in (Minhong.Yang, chao.yin, Chengshun.Wang) order by updated DESC
-  email: lingzhi.bi@amlogic.com
-  max_issues: 1
-  created_t: '2026-10-09 11:20:50'
 - id: tsk_1791545129499_03b20f
   name: irdeto_cas_analysis
   owner: minhong.yang
