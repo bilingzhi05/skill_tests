@@ -169,7 +169,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   const [formName, setFormName] = useState("")
   const [formSkillPath, setFormSkillPath] = useState("")
   const [formJql, setFormJql] = useState("")
-  const [formMaxIssues, setFormMaxIssues] = useState("50")
+  const [formMaxIssues, setFormMaxIssues] = useState("0")
   const [formEmail, setFormEmail] = useState("")
   // 触发方式：immediate=立即执行，once=指定时间执行一次
   const [formMode, setFormMode] = useState<"immediate" | "once">("immediate")
@@ -444,7 +444,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       setFormName("")
       setFormSkillPath("")
       setFormJql("")
-      setFormMaxIssues("50")
+      setFormMaxIssues("0")
       setFormEmail("")
       setFormMode("immediate")
       setFormRunAt("")
@@ -535,7 +535,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
     }
     setFormName(p.name || "")
     setFormJql(p.jql || "")
-    setFormMaxIssues(String(p.maxIssues ?? 50))
+    setFormMaxIssues(String(p.maxIssues ?? 0))
     setFormEmail(p.email || "")
     setFormMode(p.mode || "immediate")
     setFormRunAt(p.mode === "once" && p.runAt ? p.runAt.replace(" ", "T") : "")
@@ -887,10 +887,13 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
             <Input
               id="form-max"
               type="number"
-              min={1}
+              min={0}
               value={formMaxIssues}
               onChange={(e) => setFormMaxIssues(e.target.value)}
             />
+            <p className="text-xs text-muted-foreground">
+              0 表示全量分析，填 3 表示只分析 3 条
+            </p>
           </div>
           {/* 邮箱（可选） */}
           <div className="space-y-1.5">

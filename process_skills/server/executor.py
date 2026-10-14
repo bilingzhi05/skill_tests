@@ -554,13 +554,17 @@ def _execute_run(run_id: str) -> None:
             lf.flush()
             m = _PROGRESS_RE.search(line)
             if m:
-                cur, total = int(m.group(1)), int(m.group(2))
-                pct = round(cur / total * 100) if total else 0
+                cur, raw_total = int(m.group(1)), int(m.group(2))
+                # 进度分母 = min(最大处理条数, JQL 可分析条数)；最大处理条数为 0 表示不限制
+                max_issues = int(run.get("maxIssues", 0) or 0)
+                denom = min(max_issues, raw_total) if max_issues > 0 else raw_total
+                shown_cur = min(cur, denom) if denom else cur
+                pct = round(shown_cur / denom * 100) if denom else 0
                 _patch(
                     run_id,
                     progress=pct,
-                    progressTotal=total,
-                    progressMessage=f"处理第 {cur}/{total} 条",
+                    progressTotal=denom,
+                    progressMessage=f"处理第 {shown_cur}/{denom} 条",
                 )
         rc = proc.wait()
 
