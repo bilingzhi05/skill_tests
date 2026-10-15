@@ -2,7 +2,7 @@
 // 用户管理页组件（仅管理员可见）
 // 作用：管理员在这里管理所有账号（包括其他管理员）：
 //  1. 查看全部用户列表；
-//  2. 新增用户（登录名 + 密码）；
+//  2. 新增用户（登录名 + 密码 + 角色：普通用户 / 管理员）；
 //  3. 修改任意用户的登录名 和/或 密码（留空的项不修改）。
 // ============================================================
 
@@ -17,6 +17,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { AppNavbar } from "@/components/app-navbar"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Table,
   TableBody,
@@ -47,6 +54,7 @@ export function UsersPage({ username, isAdmin }: { username: string; isAdmin: bo
   // ---------- 新增账号表单 ----------
   const [newUsername, setNewUsername] = useState("")
   const [newPassword, setNewPassword] = useState("")
+  const [newRole, setNewRole] = useState("user") // "user" | "admin"
   const [adding, setAdding] = useState(false)
 
   /**
@@ -105,25 +113,29 @@ export function UsersPage({ username, isAdmin }: { username: string; isAdmin: bo
 
   /**
    * 新增账号。
-   * 作用：管理员创建新用户（普通用户），创建后出现在列表里。
+   * 作用：管理员创建新用户，可选角色（普通用户 / 管理员），创建后出现在列表里。
    */
   async function handleAdd() {
     if (!newUsername.trim() || !newPassword) {
       toast.error("请输入新账号的登录名和密码")
       return
     }
+    const isAdmin = newRole === "admin"
     setAdding(true)
     try {
       const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: newUsername.trim(), password: newPassword }),
+        body: JSON.stringify({ username: newUsername.trim(), password: newPassword, isAdmin }),
       })
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || "新增失败")
-      toast.success("新增成功", { description: `账号 ${newUsername.trim()} 已创建` })
+      toast.success("新增成功", {
+        description: `账号 ${newUsername.trim()} 已创建（${isAdmin ? "管理员" : "普通用户"}）`,
+      })
       setNewUsername("")
       setNewPassword("")
+      setNewRole("user")
       await loadUsers()
     } catch (err) {
       console.error("[用户管理] 新增失败:", err)
@@ -141,8 +153,8 @@ export function UsersPage({ username, isAdmin }: { username: string; isAdmin: bo
         <p className="text-sm font-medium text-muted-foreground">账号管理</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight md:text-3xl">用户管理</h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          管理员可以修改所有账号（包括管理员）的登录名和密码；新增的账号都是普通用户。
-          登录名同时是每个用户的数据文件夹名，请谨慎修改。
+          管理员可以修改所有账号（包括管理员）的登录名和密码；新增账号时可以选择角色
+          （普通用户 / 管理员）。登录名同时是每个用户的数据文件夹名，请谨慎修改。
         </p>
       </header>
 
@@ -151,7 +163,7 @@ export function UsersPage({ username, isAdmin }: { username: string; isAdmin: bo
         <Card>
           <CardHeader>
             <CardTitle className="text-base">新增用户</CardTitle>
-            <CardDescription>创建一个新的普通用户账号</CardDescription>
+            <CardDescription>创建一个新账号，可选择角色（普通用户 / 管理员）</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col gap-3 md:flex-row md:items-end">
@@ -172,6 +184,18 @@ export function UsersPage({ username, isAdmin }: { username: string; isAdmin: bo
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                 />
+              </div>
+              <div className="w-full space-y-1.5 md:w-40">
+                <Label>角色</Label>
+                <Select value={newRole} onValueChange={(v) => setNewRole(String(v ?? "user"))}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="user">普通用户</SelectItem>
+                    <SelectItem value="admin">管理员</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <Button onClick={handleAdd} disabled={adding} className="md:mb-0.5">
                 {adding ? <Loader2 className="size-4 animate-spin" /> : <UserPlus className="size-4" />}

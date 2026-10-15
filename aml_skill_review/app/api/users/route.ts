@@ -2,7 +2,7 @@
 // API：/api/users（仅管理员可用）
 // 作用：管理员管理所有账号（包括其他管理员）：
 //   GET  列出全部用户；
-//   POST 新增用户（登录名 + 密码）；
+//   POST 新增用户（登录名 + 密码 + 角色：普通用户 / 管理员）；
 //   PUT  修改任意用户的登录名 和/或 密码。
 // 非管理员访问一律返回 403。
 // ============================================================
@@ -40,12 +40,12 @@ export async function GET(request: Request) {
   return Response.json({ ok: true, users })
 }
 
-/** POST：新增用户 { username, password } */
+/** POST：新增用户 { username, password, isAdmin? }（isAdmin 默认 false = 普通用户） */
 export async function POST(request: Request) {
   const checked = requireAdmin(request)
   if ("error" in checked) return checked.error
   try {
-    let body: { username?: string; password?: string }
+    let body: { username?: string; password?: string; isAdmin?: boolean }
     try {
       body = await request.json()
     } catch {
@@ -53,17 +53,18 @@ export async function POST(request: Request) {
     }
     const username = String(body.username || "").trim()
     const password = String(body.password || "")
+    const isAdmin = body.isAdmin === true
     if (!username || !password) return errorResponse("请输入登录名和密码")
     if (!isValidUsername(username)) {
       return errorResponse("登录名只能包含字母、数字、点、下划线、连字符，长度 2~50")
     }
     if (password.length < 6) return errorResponse("密码至少 6 位")
     if (getUserByName(username)) return errorResponse("该登录名已被使用")
-    const created = createUser(username, password, false)
-    console.log(`[API 用户管理] 管理员新增用户「${username}」`)
+    const created = createUser(username, password, isAdmin)
+    console.log(`[API 用户管理] 管理员新增用户「${username}」（管理员=${isAdmin ? "是" : "否"}）`)
     return Response.json({
       ok: true,
-      user: { id: created.id, username: created.username, isAdmin: false, create_t: created.create_t },
+      user: { id: created.id, username: created.username, isAdmin, create_t: created.create_t },
     })
   } catch (err) {
     console.error("[API 用户管理] 新增用户失败:", err)
