@@ -445,6 +445,13 @@ def api_create_preset(body: CreatePresetBody, caller: Caller = Depends(auth)) ->
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="配置名称不能为空")
+    # 同一用户下配置名称不得重复（忽略大小写）
+    if any(
+        str(p.get("owner") or "") == caller.username
+        and str(p.get("name") or "").strip().lower() == name.lower()
+        for p in storage.load_presets()
+    ):
+        raise HTTPException(status_code=409, detail="配置名称已存在，请更换名称")
     if not body.jql.strip():
         raise HTTPException(status_code=400, detail="JQL 不能为空")
     # 普通用户只能保存自己负责的 Skill（管理员不受限）

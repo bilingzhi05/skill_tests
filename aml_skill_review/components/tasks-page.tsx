@@ -553,6 +553,10 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       toast.error("请先填写任务名称（将作为配置名）")
       return
     }
+    if (presets.some((p) => (p.name || "").trim().toLowerCase() === name.toLowerCase())) {
+      toast.error("任务名称已存在", { description: `配置「${name}」已存在，请更换名称` })
+      return
+    }
     if (!formSkillPath) {
       toast.error("请选择 skill")
       return
@@ -641,6 +645,14 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   async function handleDeletePreset() {
     if (!selectedPresetId) {
       toast.error("请先选择要删除的配置")
+      return
+    }
+    const target = presets.find((p) => p.id === selectedPresetId)
+    if (
+      !window.confirm(
+        `确定删除配置「${target?.name || selectedPresetId}」吗？删除后不可恢复。`
+      )
+    ) {
       return
     }
     try {
