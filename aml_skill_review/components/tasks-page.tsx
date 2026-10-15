@@ -739,7 +739,6 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
     owner?: string
     skill?: string
     skillOwner?: string
-    skillPath?: string
     jql?: string
     maxIssues?: number | null
     email?: string
@@ -754,7 +753,6 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       { label: "提交人", value: item.owner || "-" },
       { label: "Skill", value: item.skill || "-" },
       { label: "Skill Owner", value: item.skillOwner || "-" },
-      { label: "Skill 路径", value: item.skillPath || "-" },
       { label: "JQL 查询语句", value: item.jql || "-" },
       { label: "最大处理条数", value: String(maxIssues) + (maxIssues === 0 ? "（全量）" : "") },
       { label: "通知邮箱", value: item.email || "-" },
@@ -1165,7 +1163,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                         }
                       >
                         <FileText className="size-3.5" />
-                        配置
+                        预览配置
                       </Button>
                       <Button
                         size="sm"
@@ -1256,7 +1254,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                                 }
                               >
                                 <FileText className="size-3.5" />
-                                配置
+                                预览配置
                               </Button>
                               <Button
                                 size="sm"
@@ -1337,7 +1335,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                                 }
                               >
                                 <FileText className="size-3.5" />
-                                配置
+                                预览配置
                               </Button>
                               <Button
                                 size="sm"
@@ -1513,7 +1511,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                       }
                     >
                       <FileText className="size-3.5" />
-                      配置
+                      预览配置
                     </Button>
                     {/* 查看日志 */}
                     <Button
