@@ -505,6 +505,11 @@ def _to_scheduled(d: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/api/backend/scheduled-tasks")
 def api_list_scheduled(caller: Caller = Depends(auth)) -> dict[str, Any]:
+    """计划任务列表：普通用户和管理员都只看到自己创建的计划任务。
+
+    管理员对计划任务的审核入口是 /api/backend/approvals（含全部待审核 def），
+    不依赖本列表展示普通用户的计划任务。
+    """
     defs = storage.load_task_defs()
     result = []
     for d in defs:
@@ -514,7 +519,7 @@ def api_list_scheduled(caller: Caller = Depends(auth)) -> dict[str, Any]:
             continue
         if d.get("review") == "rejected":
             continue
-        if not caller.is_admin and d.get("owner") != caller.username:
+        if d.get("owner") != caller.username:
             continue
         result.append(_to_scheduled(d))
     return {"ok": True, "data": result}
