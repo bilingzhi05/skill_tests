@@ -39,3 +39,27 @@ tasks:
   email: bilingzhi05@gmail.com
   max_issues: 1
   created_t: '2026-10-12 16:24:03'
+- id: task_20261015_094529_016_aml-display-debug
+  name: over_60round_BT
+  owner: lingzhi.bi
+  enabled: false
+  trigger: once
+  run_at: 2026-10-15 09:47
+  skill: aml-display-debug
+  jql: key in (OTT-84222,TV-252209,TV-252366,TV-252686,TV-252094,TV-243794,OTT-100792)
+  email: bilingzhi05@gmail.com
+  max_issues: 0
+  review: approved
+  created_t: '2026-10-15 09:45:29'
+- id: task_20261015_095322_141_aml-display-debug
+  name: over_60round_BT
+  owner: lingzhi.bi
+  enabled: true
+  trigger: once
+  run_at: 2026-10-15 09:59
+  skill: aml-display-debug
+  jql: key in (OTT-84222,TV-252209,TV-252366,TV-252686,TV-252094,TV-243794,OTT-100792)
+  email: bilingzhi05@gmail.com
+  max_issues: 0
+  review: pending
+  created_t: '2026-10-15 09:53:22'
