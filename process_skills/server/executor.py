@@ -339,6 +339,32 @@ def set_run_review_status(run_id: str, status: str) -> bool:
     return storage.load_state().get("runs", {}).get(run_id, {}).get("status") == status
 
 
+def withdraw_pending_run(run_id: str, owner: str, is_admin: bool) -> bool:
+    """回撤待审核的立即执行任务（status == "pending"）。
+
+    仅创建者本人或管理员可操作：删除该 run 记录与运行目录，
+    使其不再出现在管理员待审批与普通用户「我的待审核」中。
+    返回是否成功（run 存在、处于 pending 且调用者有权限）。
+    """
+    def _upd(state: dict[str, Any]) -> None:
+        r = state["runs"].get(run_id)
+        if not r or r.get("status") != "pending":
+            return
+        if not is_admin and r.get("owner") != owner:
+            return
+        state["runs"].pop(run_id, None)
+        for path_key in ("logPath", "outputPath"):
+            p = r.get(path_key)
+            if p:
+                try:
+                    Path(p).parent.rmdir()  # 仅删除空的 run 目录
+                except OSError:
+                    pass
+
+    storage.mutate_state(_upd)
+    return storage.load_state().get("runs", {}).get(run_id) is None
+
+
 # ════════════════════════════════════════════════════════════════════════
 # 查询
 # ════════════════════════════════════════════════════════════════════════

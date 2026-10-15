@@ -373,6 +373,14 @@ def api_get_task(run_id: str, caller: Caller = Depends(auth)) -> dict[str, Any]:
 
 @app.delete("/api/backend/tasks/{run_id}")
 def api_stop_task(run_id: str, caller: Caller = Depends(auth)) -> dict[str, Any]:
+    run = executor.get_run(run_id, caller.username, caller.is_admin)
+    if not run:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if run.get("status") == "pending":
+        # 待审核任务：创建者本人或管理员可回撤（删除记录），不再等待审核
+        if not executor.withdraw_pending_run(run_id, caller.username, caller.is_admin):
+            raise HTTPException(status_code=403, detail="只有创建者或管理员可以回撤待审核任务")
+        return {"ok": True}
     if not executor.stop_run(run_id, caller.username, caller.is_admin):
         raise HTTPException(status_code=404, detail="任务不存在或当前状态不可停止")
     return {"ok": True}

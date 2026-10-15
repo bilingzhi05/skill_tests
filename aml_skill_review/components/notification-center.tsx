@@ -237,6 +237,30 @@ export function NotificationCenter({
     }
   }
 
+  /** 回撤待审核任务（审核通过前，仅创建者本人可操作）。立即执行任务走 DELETE /tasks/<id>，指定时间任务走 DELETE /scheduled-tasks/<id> */
+  async function withdrawTask(kind: "run" | "def", id: string, name: string) {
+    const label = kind === "run" ? "立即执行任务" : "指定时间任务"
+    if (!window.confirm(`确定回撤${label}「${name}」的提交吗？回撤后将不再等待审核。`)) return
+    setActingKey(`withdraw:${kind}:${id}`)
+    try {
+      const res = await fetch(
+        kind === "run"
+          ? `/api/backend/tasks/${encodeURIComponent(id)}`
+          : `/api/backend/scheduled-tasks/${encodeURIComponent(id)}`,
+        { method: "DELETE" }
+      )
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || "回撤失败")
+      toast.success("已回撤任务", { description: `「${name}」已撤销，不再等待审核` })
+      await loadAll()
+    } catch (err) {
+      console.error("[通知中心] 回撤任务失败:", err)
+      toast.error("回撤任务失败", { description: String(err) })
+    } finally {
+      setActingKey("")
+    }
+  }
+
   /** 徽标总数：待审批 + 未读审批结果 */
   const badgeCount = notices.length + reviews.length + runs.length + defs.length
 
@@ -438,6 +462,20 @@ export function NotificationCenter({
                         发起审核：任务管理 <ArrowRight className="size-3" />
                       </Link>
                     </div>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={actingKey !== "" && actingKey !== `withdraw:run:${r.id}`}
+                      onClick={() => withdrawTask("run", r.id, r.name || "未命名任务")}
+                    >
+                      {actingKey === `withdraw:run:${r.id}` ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : (
+                        <X className="size-3" />
+                      )}
+                      回撤
+                    </Button>
                   </div>
                 ))}
 
@@ -463,6 +501,20 @@ export function NotificationCenter({
                         发起审核：任务管理 <ArrowRight className="size-3" />
                       </Link>
                     </div>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={actingKey !== "" && actingKey !== `withdraw:def:${d.id}`}
+                      onClick={() => withdrawTask("def", d.id, d.name || "未命名任务")}
+                    >
+                      {actingKey === `withdraw:def:${d.id}` ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : (
+                        <X className="size-3" />
+                      )}
+                      回撤
+                    </Button>
                   </div>
                 ))}
 
