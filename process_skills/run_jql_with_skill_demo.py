@@ -121,7 +121,7 @@ def clean_excel(val):
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. Import 业务模块
 # ═══════════════════════════════════════════════════════════════════════════════
-import backend.api.jira_analysis_for_skills as ja
+import backend.api.jira_analysis as ja
 # 每次要手动更新jira_analysis到 jira_analysis_for_skills.py
 import backend.api.batch_jql_runner as batch
 
