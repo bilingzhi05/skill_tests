@@ -176,7 +176,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
   const [loading, setLoading] = useState(true)
 
   // ---------- 全部 Skill 缩略图状态（所有用户可见，可搜索、可折叠） ----------
-  const [thumbExpanded, setThumbExpanded] = useState(true)
+  const [thumbExpanded, setThumbExpanded] = useState(false)
   const [thumbKeyword, setThumbKeyword] = useState("")
 
   // ---------- 上传审核状态 ----------
@@ -876,7 +876,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
                       )}
                     </TableCell>
                     <TableCell className="max-w-[360px] text-sm">
-                      <span className="break-words">{skill.description || "-"}</span>
+                      <span className="line-clamp-2">{skill.description || "-"}</span>
                     </TableCell>
                     <TableCell className="text-right font-mono text-sm">
                       <span className="inline-flex items-center gap-1">
