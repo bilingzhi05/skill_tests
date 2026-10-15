@@ -11,7 +11,8 @@
 
 "use client"
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import Link from "next/link"
 import { toast } from "sonner"
 import { ArrowRight, Bell, Check, Clock, FileText, FileUp, Inbox, Loader2, RefreshCw, X } from "lucide-react"
@@ -159,17 +160,19 @@ export function NotificationCenter({
     return () => clearInterval(id)
   }, [loadAll])
 
-  // 点击面板外部区域时关闭
+  // 点击面板外部区域时关闭；弹窗以 portal 挂到 document.body（不在面板内），
+  // 弹窗打开期间暂停外点关闭，避免点击弹窗内部时误收起面板
   useEffect(() => {
     if (!open) return
     function onPointerDown(e: MouseEvent) {
+      if (previewItem || reviewTarget) return
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
         setOpen(false)
       }
     }
     document.addEventListener("mousedown", onPointerDown)
     return () => document.removeEventListener("mousedown", onPointerDown)
-  }, [open])
+  }, [open, previewItem, reviewTarget])
 
   /** 取消（读过）一条审批结果通知 */
   async function dismissNotice(id: string) {
@@ -716,6 +719,10 @@ export function NotificationCenter({
         </div>
       )}
 
+      {/* 渲染到 document.body：Header 的 transform 会创建 containing block，fixed 弹窗必须脱离它才能相对视口居中 */}
+      {typeof document !== "undefined" &&
+        createPortal(
+          <Fragment>
       {/* ===== 任务配置预览弹窗（申请人 / 管理员均可查看完整配置） ===== */}
       {previewItem && (
         <div
@@ -822,7 +829,10 @@ export function NotificationCenter({
             </div>
           </div>
         </div>
-      )}
+          )}
+          </Fragment>,
+          document.body
+        )}
     </div>
   )
 }
