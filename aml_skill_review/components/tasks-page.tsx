@@ -68,6 +68,7 @@ type TaskInfo = {
   jql: string
   maxIssues: number
   email: string
+  mode: string
   status: TaskStatus
   progress: number
   progressTotal: number
@@ -151,9 +152,13 @@ type ApprovalDef = {
   skill: string
   jql: string
   email: string
+  maxIssues: number
   runAt: string
   createdAt: string
 }
+
+/** 配置预览弹窗展示的字段项 */
+type PreviewField = { label: string; value: string }
 
 // ---------- 状态徽章配色 ----------
 
@@ -222,6 +227,17 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   const [loadingApprovals, setLoadingApprovals] = useState(true)
   // 当前正在审核的标识（kind:run|def + id）
   const [reviewingKey, setReviewingKey] = useState("")
+
+  // ---------- 配置预览 / 审核弹窗 ----------
+  const [previewItem, setPreviewItem] = useState<{ title: string; status: string; fields: PreviewField[] } | null>(null)
+  // 管理员审核弹窗：kind + 通过/拒绝意图 + 对应条目
+  const [reviewTarget, setReviewTarget] = useState<{
+    kind: "run" | "def"
+    accept: boolean
+    item: ApprovalRun | ApprovalDef
+  } | null>(null)
+  const [reviewRemark, setReviewRemark] = useState("")
+  const [reviewSubmitting, setReviewSubmitting] = useState(false)
 
   // ---------- 日志查看弹窗 ----------
   const [logTask, setLogTask] = useState<TaskInfo | null>(null)
@@ -716,25 +732,89 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   }
 
   /**
-   * 管理员审核待审核任务（通过 / 拒绝）。
-   * 作用：调用 /api/backend/approvals 对应端点，成功后刷新待审核列表、任务列表与计划任务。
+   * 把任务条目组装为「完整配置」字段列表，供预览弹窗 / 审核弹窗展示。
    */
-  async function handleReview(kind: "run" | "def", id: string, accept: boolean) {
-    const key = `${kind}:${id}`
+  function taskConfigFields(item: {
+    name?: string
+    owner?: string
+    skill?: string
+    skillOwner?: string
+    skillPath?: string
+    jql?: string
+    maxIssues?: number | null
+    email?: string
+    runAt?: string
+    createdAt?: string
+    mode?: string
+    review?: string
+  }): PreviewField[] {
+    const maxIssues = item.maxIssues ?? 0
+    return [
+      { label: "任务名称", value: item.name || "-" },
+      { label: "提交人", value: item.owner || "-" },
+      { label: "Skill", value: item.skill || "-" },
+      { label: "Skill Owner", value: item.skillOwner || "-" },
+      { label: "Skill 路径", value: item.skillPath || "-" },
+      { label: "JQL 查询语句", value: item.jql || "-" },
+      { label: "最大处理条数", value: String(maxIssues) + (maxIssues === 0 ? "（全量）" : "") },
+      { label: "通知邮箱", value: item.email || "-" },
+      {
+        label: "触发方式",
+        value:
+          item.mode === "once"
+            ? `指定时间（${item.runAt || "-"}）`
+            : item.mode === "cron"
+            ? "周期执行"
+            : item.mode === "immediate"
+            ? "立即执行"
+            : item.runAt
+            ? `指定时间（${item.runAt}）`
+            : "立即执行",
+      },
+      { label: "创建时间", value: item.createdAt || "-" },
+    ]
+  }
+
+  /**
+   * 打开管理员审核弹窗（配置预览 + 备注输入 + 通过/拒绝确认）。
+   */
+  function openReviewModal(kind: "run" | "def", item: ApprovalRun | ApprovalDef, accept: boolean) {
+    setReviewRemark("")
+    setReviewTarget({ kind, accept, item })
+  }
+
+  /**
+   * 管理员提交审核（通过 / 拒绝），可附备注，备注随结果通知发给申请人。
+   * 作用：调用 /api/backend/approvals 对应端点（body 携带 remark），成功后刷新待审核列表、任务列表与计划任务。
+   */
+  async function submitReview() {
+    if (!reviewTarget) return
+    const { kind, accept: isAccept, item } = reviewTarget
+    const key = `${kind}:${item.id}`
     setReviewingKey(key)
+    setReviewSubmitting(true)
     try {
       const res = await fetch(
-        `/api/backend/approvals/${kind}/${encodeURIComponent(id)}/${accept ? "accept" : "reject"}`,
-        { method: "POST" }
+        `/api/backend/approvals/${kind}/${encodeURIComponent(item.id)}/${isAccept ? "accept" : "reject"}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ remark: reviewRemark.trim() }),
+        }
       )
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || "审核失败")
-      toast.success(accept ? "已通过审核" : "已拒绝执行")
+      toast.success(isAccept ? "已通过审核" : "已拒绝执行", {
+        description: reviewRemark.trim() ? `已通知申请人并附带备注` : undefined,
+      })
+      setReviewTarget(null)
+      setReviewRemark("")
       await Promise.all([loadApprovals(), loadTasks(), loadStats(), loadScheduled()])
     } catch (err) {
       console.error("[任务页] 审核任务失败:", err)
       toast.error("审核失败", { description: String(err) })
     } finally {
+      setReviewSubmitting(false)
       setReviewingKey("")
     }
   }
@@ -1072,19 +1152,35 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                     )}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleWithdrawScheduled(st)}
-                      disabled={deletingScheduledId === st.id}
-                    >
-                      {deletingScheduledId === st.id ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      ) : (
-                        <X className="size-3.5" />
-                      )}
-                      回撤
-                    </Button>
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setPreviewItem({
+                            title: st.name || "未命名任务",
+                            status: st.review === "pending" ? "待审核" : "已通过",
+                            fields: taskConfigFields({ ...st, mode: "once" }),
+                          })
+                        }
+                      >
+                        <FileText className="size-3.5" />
+                        配置
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleWithdrawScheduled(st)}
+                        disabled={deletingScheduledId === st.id}
+                      >
+                        {deletingScheduledId === st.id ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <X className="size-3.5" />
+                        )}
+                        回撤
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -1125,7 +1221,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                         <TableHead className="min-w-[160px]">JQL</TableHead>
                         <TableHead className="w-[90px]">提交人</TableHead>
                         <TableHead className="w-[150px]">提交时间</TableHead>
-                        <TableHead className="w-[130px] text-right">操作</TableHead>
+                        <TableHead className="w-[190px] text-right">操作</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1150,10 +1246,24 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                             <div className="flex items-center justify-end gap-1">
                               <Button
                                 size="sm"
+                                variant="ghost"
+                                onClick={() =>
+                                  setPreviewItem({
+                                    title: r.name || "未命名任务",
+                                    status: "待审核",
+                                    fields: taskConfigFields(r),
+                                  })
+                                }
+                              >
+                                <FileText className="size-3.5" />
+                                配置
+                              </Button>
+                              <Button
+                                size="sm"
                                 variant="outline"
                                 className="border-green-600 text-green-600 hover:bg-green-600 hover:text-white"
                                 disabled={reviewingKey !== ""}
-                                onClick={() => handleReview("run", r.id, true)}
+                                onClick={() => openReviewModal("run", r, true)}
                               >
                                 {reviewingKey === `run:${r.id}` ? (
                                   <Loader2 className="size-3.5 animate-spin" />
@@ -1167,7 +1277,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                                 variant="outline"
                                 className="border-destructive text-destructive hover:bg-destructive hover:text-white"
                                 disabled={reviewingKey !== ""}
-                                onClick={() => handleReview("run", r.id, false)}
+                                onClick={() => openReviewModal("run", r, false)}
                               >
                                 {reviewingKey === `run:${r.id}` ? (
                                   <Loader2 className="size-3.5 animate-spin" />
@@ -1197,7 +1307,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                         <TableHead className="w-[160px]">执行时间</TableHead>
                         <TableHead className="w-[90px]">提交人</TableHead>
                         <TableHead className="w-[150px]">提交时间</TableHead>
-                        <TableHead className="w-[130px] text-right">操作</TableHead>
+                        <TableHead className="w-[190px] text-right">操作</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1217,10 +1327,24 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                             <div className="flex items-center justify-end gap-1">
                               <Button
                                 size="sm"
+                                variant="ghost"
+                                onClick={() =>
+                                  setPreviewItem({
+                                    title: d.name || "未命名任务",
+                                    status: "待审核",
+                                    fields: taskConfigFields({ ...d, mode: "once" }),
+                                  })
+                                }
+                              >
+                                <FileText className="size-3.5" />
+                                配置
+                              </Button>
+                              <Button
+                                size="sm"
                                 variant="outline"
                                 className="border-green-600 text-green-600 hover:bg-green-600 hover:text-white"
                                 disabled={reviewingKey !== ""}
-                                onClick={() => handleReview("def", d.id, true)}
+                                onClick={() => openReviewModal("def", d, true)}
                               >
                                 {reviewingKey === `def:${d.id}` ? (
                                   <Loader2 className="size-3.5 animate-spin" />
@@ -1234,7 +1358,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                                 variant="outline"
                                 className="border-destructive text-destructive hover:bg-destructive hover:text-white"
                                 disabled={reviewingKey !== ""}
-                                onClick={() => handleReview("def", d.id, false)}
+                                onClick={() => openReviewModal("def", d, false)}
                               >
                                 {reviewingKey === `def:${d.id}` ? (
                                   <Loader2 className="size-3.5 animate-spin" />
@@ -1373,6 +1497,24 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                 <TableCell className="text-xs text-muted-foreground">{task.createdAt}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-1">
+                    {/* 查看完整配置 */}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setPreviewItem({
+                          title: task.name || "未命名任务",
+                          status: task.status,
+                          fields: [
+                            ...taskConfigFields(task),
+                            { label: "状态", value: (STATUS_META[task.status] || { label: task.status }).label },
+                          ],
+                        })
+                      }
+                    >
+                      <FileText className="size-3.5" />
+                      配置
+                    </Button>
                     {/* 查看日志 */}
                     <Button
                       size="sm"
@@ -1527,6 +1669,114 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
               <Button variant="destructive" onClick={() => handleStop(stopTarget)}>
                 <Square className="size-4" />
                 确认停止
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== 任务配置预览弹窗 ========== */}
+      {previewItem && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setPreviewItem(null)}
+        >
+          <div
+            className="flex max-h-[80vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2">
+                <FileText className="size-4 text-muted-foreground" />
+                <span className="text-sm font-medium">任务配置：{previewItem.title}</span>
+                {previewItem.status && (
+                  <span className="text-xs text-muted-foreground">（{previewItem.status}）</span>
+                )}
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => setPreviewItem(null)}>
+                关闭
+              </Button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              <div className="grid grid-cols-1 gap-x-6 gap-y-3 md:grid-cols-2">
+                {previewItem.fields.map((f) => (
+                  <div key={f.label} className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">{f.label}</p>
+                    <p className="break-all text-sm">{f.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== 管理员审核弹窗（配置预览 + 备注 + 通过/拒绝） ========== */}
+      {reviewTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setReviewTarget(null)}
+        >
+          <div
+            className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2">
+                {reviewTarget.accept ? (
+                  <Check className="size-4 text-green-600" />
+                ) : (
+                  <X className="size-4 text-destructive" />
+                )}
+                <span className="text-sm font-medium">
+                  {reviewTarget.accept ? "通过审核" : "拒绝执行"}：{reviewTarget.item.name || "未命名任务"}
+                </span>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => setReviewTarget(null)} disabled={reviewSubmitting}>
+                关闭
+              </Button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">任务完整配置</p>
+              <div className="grid grid-cols-1 gap-x-6 gap-y-3 rounded-lg border border-border bg-muted/30 p-3 md:grid-cols-2">
+                {taskConfigFields({
+                  ...reviewTarget.item,
+                  mode: reviewTarget.kind === "def" ? "once" : "immediate",
+                }).map((f) => (
+                  <div key={f.label} className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">{f.label}</p>
+                    <p className="break-all text-sm">{f.value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 space-y-1.5">
+                <Label htmlFor="review-remark">审核备注（可选，随结果通知发送给申请人）</Label>
+                <Textarea
+                  id="review-remark"
+                  value={reviewRemark}
+                  onChange={(e) => setReviewRemark(e.target.value)}
+                  placeholder="例如：JQL 范围过大请确认后重新提交；或：已通过，稍后调度执行"
+                  className="min-h-20 text-sm"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+              <Button variant="outline" onClick={() => setReviewTarget(null)} disabled={reviewSubmitting}>
+                取消
+              </Button>
+              <Button
+                variant={reviewTarget.accept ? "default" : "destructive"}
+                onClick={submitReview}
+                disabled={reviewSubmitting}
+              >
+                {reviewSubmitting ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : reviewTarget.accept ? (
+                  <Check className="size-4" />
+                ) : (
+                  <X className="size-4" />
+                )}
+                确认{reviewTarget.accept ? "通过" : "拒绝"}
               </Button>
             </div>
           </div>

@@ -526,6 +526,24 @@ def api_list_scheduled(caller: Caller = Depends(auth)) -> dict[str, Any]:
 
 
 # ---- 任务审核：普通用户创建的任务（立即执行 / 指定时间）由管理员通过或拒绝 ----
+class ReviewBody(BaseModel):
+    """审核请求体：管理员可附备注，随审核结果通知一并发送给申请人。"""
+    remark: str = ""
+
+
+def _review_message(kind: str, name: str, remark: str, run_at: str = "") -> str:
+    """构造发给申请人的审核结果通知文案（含管理员备注）。"""
+    base = f"任务「{name}」已通过审核，即将执行。"
+    if kind == "rejected":
+        base = f"任务「{name}」已被拒绝执行。"
+    elif run_at:
+        base = f"计划任务「{name}」已通过审核，将于 {run_at} 执行。"
+    remark = (remark or "").strip()
+    if remark:
+        base += f" 管理员备注：{remark}"
+    return base
+
+
 @app.get("/api/backend/approvals")
 def api_list_approvals(caller: Caller = Depends(admin_only)) -> dict[str, Any]:
     defs = [
@@ -536,6 +554,7 @@ def api_list_approvals(caller: Caller = Depends(admin_only)) -> dict[str, Any]:
             "skill": d.get("skill"),
             "jql": d.get("jql"),
             "email": d.get("email"),
+            "maxIssues": d.get("max_issues", 0),
             "runAt": d.get("run_at"),
             "createdAt": d.get("created_t"),
         }
@@ -546,32 +565,62 @@ def api_list_approvals(caller: Caller = Depends(admin_only)) -> dict[str, Any]:
 
 
 @app.post("/api/backend/approvals/run/{run_id}/accept")
-def api_accept_run(run_id: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+def api_accept_run(run_id: str, body: ReviewBody | None = None, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+    run = executor.get_run(run_id, caller.username, caller.is_admin)
+    if not run or run.get("status") != "pending":
+        raise HTTPException(status_code=404, detail="任务不存在或非待审核状态")
     if not executor.set_run_review_status(run_id, "queued"):
         raise HTTPException(status_code=404, detail="任务不存在或非待审核状态")
+    name = str(run.get("name") or "") or str(run.get("skill") or "")
+    remark = body.remark if body else ""
+    skills_mgr.add_notice(
+        str(run.get("owner") or ""),
+        "approved",
+        name,
+        _review_message("approved", name, remark),
+    )
     return {"ok": True}
 
 
 @app.post("/api/backend/approvals/run/{run_id}/reject")
-def api_reject_run(run_id: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+def api_reject_run(run_id: str, body: ReviewBody | None = None, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+    run = executor.get_run(run_id, caller.username, caller.is_admin)
+    if not run or run.get("status") != "pending":
+        raise HTTPException(status_code=404, detail="任务不存在或非待审核状态")
     if not executor.set_run_review_status(run_id, "rejected"):
         raise HTTPException(status_code=404, detail="任务不存在或非待审核状态")
+    name = str(run.get("name") or "") or str(run.get("skill") or "")
+    remark = body.remark if body else ""
+    skills_mgr.add_notice(
+        str(run.get("owner") or ""),
+        "rejected",
+        name,
+        _review_message("rejected", name, remark),
+    )
     return {"ok": True}
 
 
 @app.post("/api/backend/approvals/def/{task_id}/accept")
-def api_accept_def(task_id: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+def api_accept_def(task_id: str, body: ReviewBody | None = None, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
     defs = storage.load_task_defs()
     target = next((d for d in defs if d.get("id") == task_id), None)
     if target is None or target.get("review") != "pending":
         raise HTTPException(status_code=404, detail="计划任务不存在或非待审核状态")
     target["review"] = "approved"
     storage.upsert_task_def(target)
+    name = str(target.get("name") or "") or str(target.get("skill") or "")
+    remark = body.remark if body else ""
+    skills_mgr.add_notice(
+        str(target.get("owner") or ""),
+        "approved",
+        name,
+        _review_message("approved", name, remark, str(target.get("run_at") or "")),
+    )
     return {"ok": True}
 
 
 @app.post("/api/backend/approvals/def/{task_id}/reject")
-def api_reject_def(task_id: str, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
+def api_reject_def(task_id: str, body: ReviewBody | None = None, caller: Caller = Depends(admin_only)) -> dict[str, Any]:
     defs = storage.load_task_defs()
     target = next((d for d in defs if d.get("id") == task_id), None)
     if target is None or target.get("review") != "pending":
@@ -579,6 +628,14 @@ def api_reject_def(task_id: str, caller: Caller = Depends(admin_only)) -> dict[s
     target["review"] = "rejected"
     target["enabled"] = False
     storage.upsert_task_def(target)
+    name = str(target.get("name") or "") or str(target.get("skill") or "")
+    remark = body.remark if body else ""
+    skills_mgr.add_notice(
+        str(target.get("owner") or ""),
+        "rejected",
+        name,
+        _review_message("rejected", name, remark),
+    )
     return {"ok": True}
 
 

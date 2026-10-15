@@ -14,9 +14,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { toast } from "sonner"
-import { ArrowRight, Bell, Check, Clock, FileUp, Inbox, Loader2, RefreshCw, X } from "lucide-react"
+import { ArrowRight, Bell, Check, Clock, FileText, FileUp, Inbox, Loader2, RefreshCw, X } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
 /** 审核结果通知（对应 GET /skills/notices） */
@@ -58,9 +60,13 @@ type ApprovalDef = {
   skill: string
   jql: string
   email: string
+  maxIssues: number
   runAt: string
   createdAt: string
 }
+
+/** 配置预览弹窗展示的字段项 */
+type PreviewField = { label: string; value: string }
 
 /** 分区渲染：标题 + 计数 + 内容 */
 function Section({
@@ -97,6 +103,15 @@ export function NotificationCenter({
   const [defs, setDefs] = useState<ApprovalDef[]>([])
   const [loading, setLoading] = useState(false)
   const [actingKey, setActingKey] = useState("")
+  // ---------- 配置预览 / 管理员审核弹窗 ----------
+  const [previewItem, setPreviewItem] = useState<{ title: string; status: string; fields: PreviewField[] } | null>(null)
+  const [reviewTarget, setReviewTarget] = useState<{
+    kind: "run" | "def"
+    accept: boolean
+    item: ApprovalRun | ApprovalDef
+  } | null>(null)
+  const [reviewRemark, setReviewRemark] = useState("")
+  const [reviewSubmitting, setReviewSubmitting] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
   /**
@@ -217,22 +232,81 @@ export function NotificationCenter({
     }
   }
 
-  /** 审核任务（管理员：approvals/runs|defs 的 accept / reject） */
-  async function reviewApproval(kind: "run" | "def", id: string, accept: boolean) {
-    setActingKey(`${kind}:${id}`)
+  /** 把任务条目组装为「完整配置」字段列表，供预览 / 审核弹窗展示 */
+  function taskConfigFields(item: {
+    name?: string
+    owner?: string
+    skill?: string
+    skillOwner?: string
+    skillPath?: string
+    jql?: string
+    maxIssues?: number | null
+    email?: string
+    runAt?: string
+    createdAt?: string
+    mode?: string
+  }): PreviewField[] {
+    const maxIssues = item.maxIssues ?? 0
+    return [
+      { label: "任务名称", value: item.name || "-" },
+      { label: "提交人", value: item.owner || "-" },
+      { label: "Skill", value: item.skill || "-" },
+      { label: "Skill Owner", value: item.skillOwner || "-" },
+      { label: "Skill 路径", value: item.skillPath || "-" },
+      { label: "JQL 查询语句", value: item.jql || "-" },
+      { label: "最大处理条数", value: String(maxIssues) + (maxIssues === 0 ? "（全量）" : "") },
+      { label: "通知邮箱", value: item.email || "-" },
+      {
+        label: "触发方式",
+        value:
+          item.mode === "once"
+            ? `指定时间（${item.runAt || "-"}）`
+            : item.mode === "cron"
+            ? "周期执行"
+            : item.mode === "immediate"
+            ? "立即执行"
+            : item.runAt
+            ? `指定时间（${item.runAt}）`
+            : "立即执行",
+      },
+      { label: "创建时间", value: item.createdAt || "-" },
+    ]
+  }
+
+  /** 打开管理员审核弹窗（配置预览 + 备注输入 + 通过/拒绝） */
+  function openReviewModal(kind: "run" | "def", item: ApprovalRun | ApprovalDef, accept: boolean) {
+    setReviewRemark("")
+    setReviewTarget({ kind, accept, item })
+  }
+
+  /** 管理员提交审核（通过 / 拒绝），可附备注，备注随结果通知发给申请人 */
+  async function submitReview() {
+    if (!reviewTarget) return
+    const { kind, accept: isAccept, item } = reviewTarget
+    setActingKey(`${kind}:${item.id}`)
+    setReviewSubmitting(true)
     try {
       const res = await fetch(
-        `/api/backend/approvals/${kind}/${encodeURIComponent(id)}/${accept ? "accept" : "reject"}`,
-        { method: "POST" }
+        `/api/backend/approvals/${kind}/${encodeURIComponent(item.id)}/${isAccept ? "accept" : "reject"}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ remark: reviewRemark.trim() }),
+        }
       )
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || "审核失败")
-      toast.success(accept ? "已通过任务审核" : "已拒绝任务执行")
+      toast.success(isAccept ? "已通过审核" : "已拒绝执行", {
+        description: reviewRemark.trim() ? "已通知申请人并附带备注" : undefined,
+      })
+      setReviewTarget(null)
+      setReviewRemark("")
       await loadAll()
     } catch (err) {
       console.error("[通知中心] 任务审核失败:", err)
-      toast.error("任务审核失败", { description: String(err) })
+      toast.error("审核失败", { description: String(err) })
     } finally {
+      setReviewSubmitting(false)
       setActingKey("")
     }
   }
@@ -462,20 +536,35 @@ export function NotificationCenter({
                         发起审核：任务管理 <ArrowRight className="size-3" />
                       </Link>
                     </div>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      className="shrink-0"
-                      disabled={actingKey !== "" && actingKey !== `withdraw:run:${r.id}`}
-                      onClick={() => withdrawTask("run", r.id, r.name || "未命名任务")}
-                    >
-                      {actingKey === `withdraw:run:${r.id}` ? (
-                        <Loader2 className="size-3 animate-spin" />
-                      ) : (
-                        <X className="size-3" />
-                      )}
-                      回撤
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() =>
+                          setPreviewItem({
+                            title: r.name || "未命名任务",
+                            status: "待审核",
+                            fields: taskConfigFields({ ...r }),
+                          })
+                        }
+                      >
+                        <FileText className="size-3" />
+                        查看配置
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={actingKey !== "" && actingKey !== `withdraw:run:${r.id}`}
+                        onClick={() => withdrawTask("run", r.id, r.name || "未命名任务")}
+                      >
+                        {actingKey === `withdraw:run:${r.id}` ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <X className="size-3" />
+                        )}
+                        回撤
+                      </Button>
+                    </div>
                   </div>
                 ))}
 
@@ -501,20 +590,35 @@ export function NotificationCenter({
                         发起审核：任务管理 <ArrowRight className="size-3" />
                       </Link>
                     </div>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      className="shrink-0"
-                      disabled={actingKey !== "" && actingKey !== `withdraw:def:${d.id}`}
-                      onClick={() => withdrawTask("def", d.id, d.name || "未命名任务")}
-                    >
-                      {actingKey === `withdraw:def:${d.id}` ? (
-                        <Loader2 className="size-3 animate-spin" />
-                      ) : (
-                        <X className="size-3" />
-                      )}
-                      回撤
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() =>
+                          setPreviewItem({
+                            title: d.name || "未命名任务",
+                            status: "待审核",
+                            fields: taskConfigFields({ ...d, mode: "once" }),
+                          })
+                        }
+                      >
+                        <FileText className="size-3" />
+                        查看配置
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={actingKey !== "" && actingKey !== `withdraw:def:${d.id}`}
+                        onClick={() => withdrawTask("def", d.id, d.name || "未命名任务")}
+                      >
+                        {actingKey === `withdraw:def:${d.id}` ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <X className="size-3" />
+                        )}
+                        回撤
+                      </Button>
+                    </div>
                   </div>
                 ))}
 
@@ -538,8 +642,8 @@ export function NotificationCenter({
                     <ReviewButtons
                       prefix="run"
                       id={r.id}
-                      onApprove={() => reviewApproval("run", r.id, true)}
-                      onReject={() => reviewApproval("run", r.id, false)}
+                      onApprove={() => openReviewModal("run", r, true)}
+                      onReject={() => openReviewModal("run", r, false)}
                     />
                   </div>
                 ))}
@@ -564,8 +668,8 @@ export function NotificationCenter({
                     <ReviewButtons
                       prefix="def"
                       id={d.id}
-                      onApprove={() => reviewApproval("def", d.id, true)}
-                      onReject={() => reviewApproval("def", d.id, false)}
+                      onApprove={() => openReviewModal("def", d, true)}
+                      onReject={() => openReviewModal("def", d, false)}
                     />
                   </div>
                 ))}
@@ -609,6 +713,114 @@ export function NotificationCenter({
               ) : (
                 <span>提交后需管理员审核通过方可执行</span>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== 任务配置预览弹窗（申请人 / 管理员均可查看完整配置） ===== */}
+      {previewItem && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setPreviewItem(null)}
+        >
+          <div
+            className="flex max-h-[80vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2">
+                <FileText className="size-4 text-muted-foreground" />
+                <span className="text-sm font-medium">任务配置：{previewItem.title}</span>
+                {previewItem.status && (
+                  <span className="text-xs text-muted-foreground">（{previewItem.status}）</span>
+                )}
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => setPreviewItem(null)}>
+                关闭
+              </Button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              <div className="grid grid-cols-1 gap-x-6 gap-y-3 md:grid-cols-2">
+                {previewItem.fields.map((f) => (
+                  <div key={f.label} className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">{f.label}</p>
+                    <p className="break-all text-sm">{f.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== 管理员审核弹窗（配置预览 + 备注 + 通过/拒绝） ===== */}
+      {reviewTarget && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setReviewTarget(null)}
+        >
+          <div
+            className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2">
+                {reviewTarget.accept ? (
+                  <Check className="size-4 text-green-600" />
+                ) : (
+                  <X className="size-4 text-destructive" />
+                )}
+                <span className="text-sm font-medium">
+                  {reviewTarget.accept ? "通过审核" : "拒绝执行"}：{reviewTarget.item.name || "未命名任务"}
+                </span>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => setReviewTarget(null)} disabled={reviewSubmitting}>
+                关闭
+              </Button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">任务完整配置</p>
+              <div className="grid grid-cols-1 gap-x-6 gap-y-3 rounded-lg border border-border bg-muted/30 p-3 md:grid-cols-2">
+                {taskConfigFields({
+                  ...reviewTarget.item,
+                  mode: reviewTarget.kind === "def" ? "once" : "immediate",
+                }).map((f) => (
+                  <div key={f.label} className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">{f.label}</p>
+                    <p className="break-all text-sm">{f.value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 space-y-1.5">
+                <Label htmlFor="notice-review-remark">审核备注（可选，随结果通知发送给申请人）</Label>
+                <Textarea
+                  id="notice-review-remark"
+                  value={reviewRemark}
+                  onChange={(e) => setReviewRemark(e.target.value)}
+                  placeholder="例如：JQL 范围过大请确认后重新提交；或：已通过，稍后调度执行"
+                  className="min-h-20 text-sm"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+              <Button variant="outline" onClick={() => setReviewTarget(null)} disabled={reviewSubmitting}>
+                取消
+              </Button>
+              <Button
+                variant={reviewTarget.accept ? "default" : "destructive"}
+                onClick={submitReview}
+                disabled={reviewSubmitting}
+              >
+                {reviewSubmitting ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : reviewTarget.accept ? (
+                  <Check className="size-4" />
+                ) : (
+                  <X className="size-4" />
+                )}
+                确认{reviewTarget.accept ? "通过" : "拒绝"}
+              </Button>
             </div>
           </div>
         </div>
