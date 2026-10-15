@@ -104,7 +104,7 @@ export function AppNavbar({ username, isAdmin }: { username: string; isAdmin: bo
           })}
         </nav>
 
-        {/* 通知中心（统一铃铛：待审批 + 审批结果）+ 当前用户 + 角色 + 退出登录 */}
+        {/* 通知中心（统一铃铛：待审核 + 审核结果）+ 当前用户 + 角色 + 退出登录 */}
         <div className="flex shrink-0 items-center gap-2">
           <NotificationCenter username={username} isAdmin={isAdmin} />
           <div className="hidden items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs sm:flex">

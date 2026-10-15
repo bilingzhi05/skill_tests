@@ -1,11 +1,11 @@
 // ============================================================
 // 顶部统一通知中心（挂在 AppNavbar 右侧）
 // 作用：把全站所有「通知铃铛」集中到顶部导航栏的一个铃铛里：
-//  1. 待审批（管理员）：Skill 上传审核 / 立即执行任务 / 指定时间任务，
+//  1. 待审核（管理员）：Skill 上传审核 / 立即执行任务 / 指定时间任务，
 //     可直接在面板内「通过 / 拒绝」，或跳转对应页面处理；
 //     （普通用户显示自己提交的待审核项，可撤销上传）
-//  2. 审批结果（所有用户）：Skill 上传审核的通过 / 拒绝结果，可「取消通知」。
-// 铃铛徽标数字 = 待审批数 + 未读审批结果数；打开面板自动刷新，
+//  2. 审核结果（所有用户）：Skill 上传审核的通过 / 拒绝结果，可「取消通知」。
+// 铃铛徽标数字 = 待审核数 + 未读审核结果数；打开面板自动刷新，
 // 每 60 秒定时刷新，保持计数与列表最新。
 // ============================================================
 
@@ -117,7 +117,7 @@ export function NotificationCenter({
 
   /**
    * 加载全部通知数据（并行请求，失败不影响其他数据源）。
-   *  管理员：/approvals 取全部待审批（立即执行 runs + 指定时间 defs）；
+   *  管理员：/approvals 取全部待审核（立即执行 runs + 指定时间 defs）；
    *  普通用户：从自己的任务列表中筛出 status=pending 的 runs，
    *  从自己的定时任务中筛出 review=pending 的 defs，展示「我的待审核」。
    */
@@ -174,7 +174,7 @@ export function NotificationCenter({
     return () => document.removeEventListener("mousedown", onPointerDown)
   }, [open, previewItem, reviewTarget])
 
-  /** 取消（读过）一条审批结果通知 */
+  /** 取消（读过）一条审核结果通知 */
   async function dismissNotice(id: string) {
     setActingKey(`notice:${id}`)
     try {
@@ -336,7 +336,7 @@ export function NotificationCenter({
     }
   }
 
-  /** 徽标总数：待审批 + 未读审批结果 */
+  /** 徽标总数：待审核 + 未读审核结果 */
   const badgeCount = notices.length + reviews.length + runs.length + defs.length
 
   /** 通用「通过/拒绝」操作按钮组 */
@@ -454,13 +454,13 @@ export function NotificationCenter({
 
           {/* 面板内容滚动区 */}
           <div className="max-h-[min(70vh,32rem)] overflow-auto p-0">
-            {/* ---------- 待审批（管理员） / 我的待审核（普通用户） ---------- */}
-            <Section title={isAdmin ? "待审批" : "我的待审核"} count={reviews.length + runs.length + defs.length}>
+            {/* ---------- 待审核（管理员） / 我的待审核（普通用户） ---------- */}
+            <Section title={isAdmin ? "待审核" : "我的待审核"} count={reviews.length + runs.length + defs.length}>
               {!isAdmin && reviews.length === 0 && runs.length === 0 && defs.length === 0 && (
                 <Empty text="暂无等待审核的提交" />
               )}
               {isAdmin && reviews.length === 0 && runs.length === 0 && defs.length === 0 && (
-                <Empty text="暂无待审批内容" />
+                <Empty text="暂无待审核内容" />
               )}
 
               {/* Skill 上传审核 */}
@@ -481,7 +481,7 @@ export function NotificationCenter({
                     <p className="text-[11px] text-muted-foreground">
                       上传者：{rv.owner} · {rv.uploadedAt}
                     </p>
-                    {!isAdmin && rv.owner !== username && (
+                    {rv.owner !== username && (
                       <Link
                         href="/skills"
                         className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
@@ -639,6 +639,12 @@ export function NotificationCenter({
                       <p className="text-[11px] text-muted-foreground">
                         提交人：{r.owner} · {r.createdAt}
                       </p>
+                      <Link
+                        href="/tasks"
+                        className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
+                      >
+                        发起审核：任务管理 <ArrowRight className="size-3" />
+                      </Link>
                     </div>
                     <ReviewButtons
                       prefix="run"
@@ -665,6 +671,12 @@ export function NotificationCenter({
                       <p className="text-[11px] text-muted-foreground">
                         提交人：{d.owner} · {d.createdAt}
                       </p>
+                      <Link
+                        href="/tasks"
+                        className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
+                      >
+                        发起审核：任务管理 <ArrowRight className="size-3" />
+                      </Link>
                     </div>
                     <ReviewButtons
                       prefix="def"
@@ -677,10 +689,10 @@ export function NotificationCenter({
 
             </Section>
 
-            {/* ---------- 审批结果（所有用户） ---------- */}
-            <Section title="审批结果" count={notices.length}>
+            {/* ---------- 审核结果（所有用户） ---------- */}
+            <Section title="审核结果" count={notices.length}>
               {notices.length === 0 ? (
-                <Empty text="暂无审批结果" />
+                <Empty text="暂无审核结果" />
               ) : (
                 notices.map((n) => (
                   <div
@@ -710,7 +722,7 @@ export function NotificationCenter({
             <div className="flex items-center justify-between border-t border-border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">
               <span>每 60 秒自动刷新</span>
               {isAdmin ? (
-                <span>待审批需管理员处理</span>
+                <span>待审核需管理员处理</span>
               ) : (
                 <span>提交后需管理员审核通过方可执行</span>
               )}
