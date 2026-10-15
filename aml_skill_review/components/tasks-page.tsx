@@ -643,22 +643,24 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   }
 
   /**
-   * 删除计划任务（指定时间执行一次、尚未执行的 once 任务）。
-   * 作用：调用 /api/backend/scheduled-tasks/[id]（DELETE）移除计划任务。
+   * 回撤计划任务（指定时间执行一次、尚未执行的 once 任务定义）。
+   * 与通知中心回撤逻辑一致：确认后调用 /api/backend/scheduled-tasks/[id]（DELETE）移除定义，
+   * 待审核的将不再等待管理员审核，其余直接取消。
    */
-  async function handleDeleteScheduled(task: ScheduledTask) {
+  async function handleWithdrawScheduled(task: ScheduledTask) {
+    if (!window.confirm(`确定回撤计划任务「${task.name}」吗？回撤后将不再等待审核。`)) return
     setDeletingScheduledId(task.id)
     try {
       const res = await fetch(`/api/backend/scheduled-tasks/${encodeURIComponent(task.id)}`, {
         method: "DELETE",
       })
       const data = await res.json()
-      if (!data.ok) throw new Error(data.error || "删除计划任务失败")
-      toast.success("计划任务已删除", { description: task.name })
+      if (!data.ok) throw new Error(data.error || "回撤计划任务失败")
+      toast.success("已回撤计划任务", { description: `「${task.name}」已撤销，不再等待审核` })
       await loadScheduled()
     } catch (err) {
-      console.error("[任务页] 删除计划任务失败:", err)
-      toast.error("删除计划任务失败", { description: String(err) })
+      console.error("[任务页] 回撤计划任务失败:", err)
+      toast.error("回撤计划任务失败", { description: String(err) })
     } finally {
       setDeletingScheduledId("")
     }
@@ -1029,7 +1031,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
           </p>
         </div>
         <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          展示尚未执行的定时任务明细（任务名称、Skill、执行时间、创建时间、状态），可点击「删除」取消该计划。普通用户创建的计划需管理员审核通过后才会执行。
+          展示尚未执行的定时任务明细（任务名称、Skill、执行时间、创建时间、状态），可点击「回撤」取消该计划。普通用户创建的计划需管理员审核通过后才会执行。
         </p>
         {scheduledTasks.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted-foreground">
@@ -1072,16 +1074,16 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
                   <TableCell className="text-right">
                     <Button
                       size="sm"
-                      variant="destructive"
-                      onClick={() => handleDeleteScheduled(st)}
+                      variant="outline"
+                      onClick={() => handleWithdrawScheduled(st)}
                       disabled={deletingScheduledId === st.id}
                     >
                       {deletingScheduledId === st.id ? (
                         <Loader2 className="size-3.5 animate-spin" />
                       ) : (
-                        <Trash2 className="size-3.5" />
+                        <X className="size-3.5" />
                       )}
-                      删除
+                      回撤
                     </Button>
                   </TableCell>
                 </TableRow>
