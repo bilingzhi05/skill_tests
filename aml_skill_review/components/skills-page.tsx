@@ -876,7 +876,7 @@ export function SkillsPage({ username, isAdmin }: { username: string; isAdmin: b
                       )}
                     </TableCell>
                     <TableCell className="max-w-[360px] text-sm">
-                      <span className="line-clamp-2">{skill.description || "-"}</span>
+                      <span className="break-words">{skill.description || "-"}</span>
                     </TableCell>
                     <TableCell className="text-right font-mono text-sm">
                       <span className="inline-flex items-center gap-1">
