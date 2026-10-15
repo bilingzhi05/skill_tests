@@ -1109,7 +1109,10 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
           </p>
         </div>
         <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          展示尚未执行的定时任务明细（任务名称、Skill、执行时间、创建时间、状态），可点击「回撤」取消该计划。普通用户创建的计划需管理员审核通过后才会执行。
+          展示尚未执行的定时任务明细（任务名称、Skill、执行时间、创建时间、状态），可点击「回撤」取消该计划。
+          {isAdmin
+            ? "管理员可见全部用户的计划任务。"
+            : "普通用户创建的计划需管理员审核通过后才会执行。"}
         </p>
         {scheduledTasks.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted-foreground">
