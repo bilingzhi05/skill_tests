@@ -12,7 +12,6 @@ process_skills/
 ├── run_jql_with_skill_demo.py              # 核心分析脚本（可独立 CLI 运行）
 ├── llm_judge_agent_comment_accuracy.py     # 大模型结论 vs 人工结论 的判定模块
 ├── skills_tasks.yaml                       # 定时任务定义（cron + 预设参数）
-├── check_frontmatter.py                    # 调试脚本：验证 SKILL.md frontmatter 解析
 ├── server_requirements.txt                 # FastAPI 服务依赖
 ├── start_backend_server.bat                # 单独启动后端（Windows）
 ├── server/                                 # FastAPI 服务包
@@ -278,9 +277,3 @@ X-IS-ADMIN       是否为管理员（"1" / "true"）
 字段（`skills_tasks.yaml` 顶部有完整注释）：`id`（系统生成，勿手改）、`name`、`owner`（创建者）、`enabled`（false 不触发；一次性任务执行后自动置 false）、`trigger`（`cron` 周期 / `once` 指定时间一次）、`cron`（5 段表达式，trigger=cron 生效）、`run_at`（`YYYY-MM-DD HH:MM`，trigger=once 生效）、`skill`、`jql`、`email`、`max_issues`、`created_t`；审核过的定义还会有 `review: approved`。
 
 > 定时触发由后端内置调度线程（`executor.py` 的 `start_scheduler`）完成，**无需 crontab**。改 cron 语义要找 `executor.py` 的 `cron_match`；cron 字段格式必须与匹配实现一致。
-
----
-
-## 10. `check_frontmatter.py` —— 调试脚本
-
-独立小脚本：导入 `skills_mgr._parse_frontmatter`，读取指定 `SKILL.md` 并打印 `name` / `description` 解析结果，用于验证 frontmatter 解析是否正确。**不参与线上逻辑**，可放心改动或删除。

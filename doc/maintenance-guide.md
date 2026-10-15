@@ -4,7 +4,7 @@
 
 ---
 
-## 0. 全量目录清单（含草稿 / 遗留物）
+## 0. 全量目录清单（含遗留物）
 
 ```
 skill_tests/
@@ -16,7 +16,6 @@ skill_tests/
 ├── stop_all.bat  / stop_all.sh       # 按端口关闭
 ├── logs/                      # 启动脚本产生的日志与 pid：backend.log / frontend.log /
 │                              #   backend_uvicorn.out.log / .err.log / *.pid
-├── tests.py                   # 【草稿】只有一段 frontmatter 测试字符串，非正式用例
 ├── process_skills/            # 见 backend-process_skills.md
 │   ├── cron_run_*.log         # 【遗留】早期调度器（run_skills_scheduler.py）的运行日志
 │   ├── tmp/tmp/*.log          # 【遗留】临时日志
@@ -25,7 +24,7 @@ skill_tests/
     └── data/skill_owners.db、tasks.db、task_output/   # 【遗留】Next.js 自管 Skill/任务的残留
 ```
 
-> 带【遗留/草稿】标记的可安全删除；删除前用全局搜索确认无引用。其余为线上文件，改动请对照本文档。
+> 带【遗留】标记的可安全删除；删除前用全局搜索确认无引用。其余为线上文件，改动请对照本文档。
 
 ---
 
@@ -137,7 +136,6 @@ Skill 实际存放根由后端 `config.SKILL_DIR_ROOT` 决定（默认 `Rubick/A
 | `aml_skill_review/data/skill_owners.db`、`tasks.db`、`task_output/` | 同上来源的残留数据文件 |
 | `adm-zip` 依赖 | `package.json` 声明但全站无引用（Skill zip 上传实际由 FastAPI 处理） |
 | `ipml`/`run_skills_scheduler` | 仅剩 `__pycache__/run_skills_scheduler.cpython-311.pyc`，源码已删；`cron_run_*.log` 为其日志 |
-| `tests.py` | 草稿文件，只有测试字符串，非正式用例 |
 | `aml_skill_review/README.md`、`skill_tests/README.md` | 描述偏旧（Skill/任务管理已迁 FastAPI），以 `doc/` 为准 |
 | 文件夹名 vs 包名 | 目录叫 `aml_skill_review`，`package.json` 的 `name` 是 `skill-review` |
 | Node 版本 | 前端用内置 `node:sqlite`，**必须 Node.js ≥ 22** |
