@@ -256,6 +256,17 @@ export function ListPage({ username, isAdmin }: { username: string; isAdmin: boo
     if (table) loadRows(table, filterVerdict, filterHuman, viewUser)
   }, [table, filterVerdict, filterHuman, viewUser, loadRows])
 
+  // 未选择数据表（如切换查看用户后文件列表为空）时，清空上一次的列表数据，
+  // 避免界面上残留上一个用户/上一张表的内容
+  useEffect(() => {
+    if (!table) {
+      setRows([])
+      setTotal(0)
+      setVerdictOptions([])
+      setHumanOptions([])
+    }
+  }, [table])
+
   /**
    * 选择 xlsx 文件后的处理。
    * 作用：调用 /api/import 执行「查表 → 缺则导入」，成功后切换当前表。
@@ -519,14 +530,15 @@ export function ListPage({ username, isAdmin }: { username: string; isAdmin: boo
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.length === 0 && !loading && (
+                {(rows.length === 0 || !table) && !loading && (
                   <TableRow>
                     <TableCell colSpan={6} className="py-16 text-center text-muted-foreground">
                       {table ? "没有符合条件的数据" : "请先在左侧选择一个 xlsx 文件"}
                     </TableCell>
                   </TableRow>
                 )}
-                {rows.map((row, index) => (
+                {table &&
+                  rows.map((row, index) => (
                   <TableRow key={row._rowid ?? index} className="align-top">
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       {index + 1}
