@@ -23,47 +23,45 @@ from . import config, storage
 def _parse_frontmatter(text: str) -> dict[str, str]:
     """解析 SKILL.md 头部的 `---` front matter，提取 name / description。
 
-    兼容 description 的单行写法与 `>` / `|` 折叠块写法（缩进续行）。
+    简单实现：只取首个 `---` 与下一个 `---` 之间的内容；
+    对 name / description 取关键字「:」之后的所有内容，
+    折叠块写法（`>` / `|`）则把其后的缩进续行合并为一行。
     """
     t = text.lstrip("\ufeff").lstrip()
     if not t.startswith("---"):
         return {}
     lines = t.splitlines()
-    result: dict[str, str] = {}
-    i = 1
-    n = len(lines)
-    while i < n:
-        line = lines[i]
-        if line.strip() == "---":
+    # 只保留两个 --- 之间的行
+    end = len(lines)
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end = i
             break
-        m = re.match(r"^([A-Za-z0-9_-]+):(?:[ \t]+(.*))?$", line)
+    block = lines[1:end]
+
+    result: dict[str, str] = {}
+    for i, line in enumerate(block):
+        m = re.match(r"^([A-Za-z0-9_-]+):[ \t]*(.*)$", line)
         if not m:
-            i += 1
             continue
-        key = m.group(1).lower().strip()
+        key = m.group(1).lower()
         if key not in ("name", "description"):
-            i += 1
             continue
-        rest = (m.group(2) or "").strip()
-        if rest in ("", ">", ">-", ">+", "|", "|-", "|+"):
-            parts: list[str] = []
-            i += 1
-            while i < n:
-                cur = lines[i]
-                if cur.strip() == "---":
-                    break
-                if cur.startswith(" ") or cur.startswith("\t"):
-                    parts.append(cur.strip())
-                    i += 1
-                elif not cur.strip():
-                    parts.append("")
-                    i += 1
-                else:
-                    break
-            result[key] = " ".join(x for x in parts if x).strip()
+        rest = m.group(2).strip()
+        if rest and not rest.startswith((">", "|")):
+            # 单行写法：直接取「:」之后的内容
+            result[key] = rest.strip('"').strip("'")
             continue
-        result[key] = rest.strip().strip('"').strip("'")
-        i += 1
+        # 折叠块写法：取后续缩进续行，拼接为一行
+        cont: list[str] = []
+        for cur in block[i + 1:]:
+            if not cur.strip():
+                continue
+            if cur[:1] in (" ", "\t"):
+                cont.append(cur.strip())
+            else:
+                break
+        result[key] = " ".join(cont).strip()
     return result
 
 
@@ -83,8 +81,8 @@ def _extract_name(skill_dir: Path) -> str:
 
 
 def _extract_description(skill_dir: Path) -> str:
-    """返回 SKILL.md front matter 中的 description 字段（截断）。"""
-    return _read_frontmatter(skill_dir).get("description", "")[:200]
+    """返回 SKILL.md front matter 中的 description 字段（完整，不截断）。"""
+    return _read_frontmatter(skill_dir).get("description", "").strip()
 
 
 def _find_skill_md(directory: Path) -> Path | None:
