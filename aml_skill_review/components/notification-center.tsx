@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { toast } from "sonner"
-import { Bell, Check, Clock, FileUp, Inbox, Loader2, RefreshCw, X } from "lucide-react"
+import { ArrowRight, Bell, Check, Clock, FileUp, Inbox, Loader2, RefreshCw, X } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -239,8 +239,6 @@ export function NotificationCenter({
 
   /** 徽标总数：待审批 + 未读审批结果 */
   const badgeCount = notices.length + reviews.length + runs.length + defs.length
-  /** 是否还有待审批内容 */
-  const hasPendingApprovals = reviews.length + runs.length + defs.length > 0
 
   /** 通用「通过/拒绝」操作按钮组 */
   function ReviewButtons({
@@ -384,6 +382,14 @@ export function NotificationCenter({
                     <p className="text-[11px] text-muted-foreground">
                       上传者：{rv.owner} · {rv.uploadedAt}
                     </p>
+                    {!isAdmin && rv.owner !== username && (
+                      <Link
+                        href="/skills"
+                        className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
+                      >
+                        发起审核：Skill 管理 <ArrowRight className="size-3" />
+                      </Link>
+                    )}
                   </div>
                   {isAdmin ? (
                     <ReviewButtons
@@ -406,11 +412,7 @@ export function NotificationCenter({
                       )}
                       撤销
                     </Button>
-                  ) : (
-                    <Link href="/skills" className="shrink-0 text-[11px] text-primary hover:underline">
-                      去处理
-                    </Link>
-                  )}
+                  ) : null}
                 </div>
               ))}
 
@@ -429,10 +431,13 @@ export function NotificationCenter({
                       </p>
                       <p className="truncate font-mono text-[11px] text-muted-foreground">JQL：{r.jql}</p>
                       <p className="text-[11px] text-muted-foreground">提交于 {r.createdAt}</p>
+                      <Link
+                        href="/tasks"
+                        className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
+                      >
+                        发起审核：任务管理 <ArrowRight className="size-3" />
+                      </Link>
                     </div>
-                    <Link href="/tasks" className="shrink-0 text-[11px] text-primary hover:underline">
-                      去任务管理查看
-                    </Link>
                   </div>
                 ))}
 
@@ -451,10 +456,13 @@ export function NotificationCenter({
                         <Badge className="ml-1 bg-yellow-500/15 text-yellow-700 dark:text-yellow-400">待审核</Badge>
                       </p>
                       <p className="text-[11px] text-muted-foreground">提交于 {d.createdAt}</p>
+                      <Link
+                        href="/tasks"
+                        className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
+                      >
+                        发起审核：任务管理 <ArrowRight className="size-3" />
+                      </Link>
                     </div>
-                    <Link href="/tasks" className="shrink-0 text-[11px] text-primary hover:underline">
-                      去任务管理查看
-                    </Link>
                   </div>
                 ))}
 
@@ -510,22 +518,6 @@ export function NotificationCenter({
                   </div>
                 ))}
 
-              {/* 底部快捷跳转 */}
-              {hasPendingApprovals && (
-                <div className="mt-1 flex items-center justify-end gap-3 px-1 pb-1 text-[11px]">
-                  {isAdmin ? (
-                    <>
-                      <Link href="/skills" className="text-primary hover:underline">去 Skill 管理处理</Link>
-                      <Link href="/tasks" className="text-primary hover:underline">去任务管理处理</Link>
-                    </>
-                  ) : (
-                    <>
-                      <Link href="/skills" className="text-primary hover:underline">去 Skill 管理查看</Link>
-                      <Link href="/tasks" className="text-primary hover:underline">去任务管理查看</Link>
-                    </>
-                  )}
-                </div>
-              )}
             </Section>
 
             {/* ---------- 审批结果（所有用户） ---------- */}
