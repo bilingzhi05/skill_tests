@@ -113,6 +113,22 @@ export function ListPage({ username, isAdmin }: { username: string; isAdmin: boo
   }, [loadFiles])
 
   /**
+   * 管理员切换「数据所属用户」。
+   * 作用：先清空当前文件/表/过滤条件，再切换用户，
+   * 避免用上一个用户的数据表去查询新用户而报「表不存在」。
+   * 切完后由恢复记忆逻辑决定是否自动加载新用户上次查看的表。
+   */
+  function switchViewUser(value: unknown) {
+    const next = String(value || username)
+    if (next === viewUser) return
+    setSelectedFile("")
+    setTable("")
+    setFilterVerdict("")
+    setFilterHuman("")
+    setViewUser(next)
+  }
+
+  /**
    * 页面挂载时恢复记忆。
    * 作用：从评审页/统计页返回列表页时，自动恢复上次正在查看的
    * 文件和数据表，不需要重新选择数据文件。
@@ -356,7 +372,7 @@ export function ListPage({ username, isAdmin }: { username: string; isAdmin: boo
                   <Users className="size-4 text-muted-foreground" />
                   数据所属用户
                 </p>
-                <Select value={viewUser} onValueChange={(v) => setViewUser(String(v || username))}>
+                <Select value={viewUser} onValueChange={switchViewUser}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
