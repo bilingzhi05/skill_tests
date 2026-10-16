@@ -25,7 +25,7 @@ aml_skill_review/
 │   └── api/                     # 服务端 API 路由（见 api-reference.md）
 ├── components/                  # 页面组件（每个 page 对应一个组件）
 ├── lib/                         # 配置、鉴权、数据库、字段、统计、导入
-│   ├── config.ts   auth.ts   db.ts   columns.ts
+│   ├── config.ts   auth.ts   ldap.ts   db.ts   columns.ts
 │   ├── stats.ts    xlsx-import.ts    api-utils.ts   utils.ts
 ├── data/                        # 运行期数据（自动创建）
 │   ├── user_account.db          # 账户库（users / sessions）
@@ -81,10 +81,10 @@ aml_skill_review/
 ### 3.2 `lib/auth.ts` —— 账户与会话
 
 - 账户库：`data/user_account.db`，表 `users`（含 `username` / `password_hash` / `is_admin` / `create_t`）与 `sessions`。
-- 密码：`crypto.scryptSync` 加盐哈希（`hashPassword` / `verifyPassword`）。
+- 密码：`crypto.scryptSync` 加盐哈希（`hashPassword` / `verifyPassword`）。`password_hash` 为**空串**表示 **LDAP 账号**（无本地密码，登录只走 LDAP，`verifyUser` 直接判失败、不支持本地改密）。
 - 会话：`createSession` → 写入 `sessions`；浏览器 Cookie 仅存**会话编号**。
 - **首个用户自动成为管理员**（第 1 个登录/注册时 `userCount() === 0` → `is_admin = 1`）。
-- 关键函数：`getAuthDb / hashPassword / verifyPassword / userCount / getUserByName / getUserById / listUsers / getPasswordHash / createUser / updateUser / verifyUser / createSession / getUserByToken / deleteSession / sessionCookie / getTokenFromRequest / getRequestUser / getPageUser`。
+- 关键函数：`getAuthDb / hashPassword / verifyPassword / userCount / getUserByName / getUserById / listUsers / getPasswordHash / createUser / updateUser / verifyUser / createSession / getUserByToken / deleteSession / sessionCookie / getTokenFromRequest / getRequestUser / getPageUser`；LDAP 相关：`provisionLdapUser`（LDAP 校验通过后自动建档）。
 - `getRequestUser(request)` 供 API 路由用；`getPageUser()` 供服务端页面用（读 `next/headers` 的 `cookies()`）。
 
 ### 3.3 `lib/db.ts` —— 业务数据库（**按用户隔离**）
@@ -120,6 +120,12 @@ aml_skill_review/
 - `resolveTable(searchParams, username)`：清洗并校验 `table` 存在于该用户库。
 - `errorResponse(message, status)`：统一 `{ok:false,error}`。
 - `isSafeFileName(name)`：拒绝含 `/`、`\`、`..` 的文件名，且必须 `.xlsx` 结尾（防目录穿越）。
+
+### 3.8 `lib/ldap.ts` —— LDAP 校验桥接
+
+- `ldapVerify(username, password): Promise<{ enabled, authenticated }>`：登录路由调用，把「登录名 + 密码」POST 给 FastAPI 的 `/api/backend/auth/ldap/verify`（带 `X-INTERNAL-TOKEN`）。
+- 后端未配置 LDAP（`LDAP_SERVER` 空）或后端不可用时返回 `{ enabled:false, authenticated:false }`，登录路由据此**回退本地密码校验**——因此**后端没起也不影响登录**。
+- 密码仅用于后端 bind 校验，**不落库、不写日志**。
 
 ---
 
@@ -160,6 +166,7 @@ aml_skill_review/
 | `notification-center` | `GET /api/backend/skills/notices`、`GET /api/backend/skills/reviews`、`GET /api/backend/approvals`（管理员）、`GET /api/backend/tasks`、`GET /api/backend/scheduled-tasks`；动作同上 |
 | `users-page` | `GET /api/users`、`PUT /api/users` |
 
+> `POST /api/auth/login` 内部顺序：**LDAP 优先**（经 `lib/ldap.ts` 调后端 `/api/backend/auth/ldap/verify`）→ **本地密码兜底**。LDAP 校验通过的登录名若无本地档案会自动建档（首个账号仍自动成为管理员）。
 > 接口的完整参数/权限见 [api-reference.md](./api-reference.md)。
 
 ---

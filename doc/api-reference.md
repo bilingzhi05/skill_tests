@@ -15,11 +15,11 @@
 
 | 方法 | 路径 | 权限 | 参数 | 说明 |
 |---|---|---|---|---|
-| POST | `/api/auth/login` | 公开 | body `{username, password}` | 登录成功后写 Cookie `skill_review_session` |
+| POST | `/api/auth/login` | 公开 | body `{username, password}` | 登录成功后写 Cookie `skill_review_session`。**登录顺序：LDAP 优先 → 本地密码兜底**（见下方「登录认证（LDAP）」） |
 | POST | `/api/auth/logout` | 登录 | — | 删除会话 |
 | GET | `/api/auth/me` | 登录 | — | 当前用户信息 |
 | GET | `/api/auth/status` | 公开 | — | 系统状态（是否已有账号等），登录页用于「首个账号」判断 |
-| POST | `/api/auth/change-password` | 公开* | body `{username, oldPassword, newPassword}` | 修改密码；首个账号首登改密走这里 |
+| POST | `/api/auth/change-password` | 公开* | body `{username, oldPassword, newPassword}` | 修改密码；首个账号首登改密走这里。**LDAP 账号（无本地密码）返回 403** |
 
 > \* `change-password` 需校验旧密码，因此按业务需要在未登录（首登）场景也可调用。
 
@@ -66,6 +66,15 @@
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
 | GET | `/api/backend/health` | 内部 | 返回 `{ok, service, time}` |
+
+### 登录认证（LDAP）
+
+由 Next.js **登录路由**（`app/api/auth/login/route.ts`）在**登录前**直接调用，因此**只需 `X-INTERNAL-TOKEN`、不要求 `X-USER`**（此时浏览器尚未登录）。实现见 `process_skills/server/ldap_auth.py`。
+
+| 方法 | 路径 | 权限 | 参数 | 说明 |
+|---|---|---|---|---|
+| GET | `/api/backend/auth/ldap/status` | 内部 Token | — | LDAP 是否已配置（`LDAP_SERVER` 非空） |
+| POST | `/api/backend/auth/ldap/verify` | 内部 Token | body `{username, password}` | LDAP bind 校验，返回 `{enabled, authenticated}`；密码仅用于 bind，不落库、不写日志 |
 
 ### Skill 管理
 
@@ -157,6 +166,7 @@
 ## 三、鉴权与错误约定
 
 - FastAPI `auth` 依赖：`X-INTERNAL-TOKEN` 必须等于内部 Token，否则 **401**；`X-USER` 缺失 → **401**；`admin_only` 校验失败 → **403**。
+- **例外**：`/api/backend/auth/ldap/*` 只用 `internal_only` 依赖，仅校验 `X-INTERNAL-TOKEN`（登录前调用，无用户身份）。
 - FastAPI 错误返回 `{detail}`；Next.js 代理统一归一为 `{ok:false, error}` 后返回浏览器。
 - 后端未启动时代理返回 **502**，并提示启动 `process_skills/start_backend_server.bat`。
 - 业务 API（Next.js）统一错误格式：`{ok:false, error}`。

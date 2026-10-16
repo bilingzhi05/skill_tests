@@ -2,6 +2,7 @@
 // API：POST /api/auth/change-password
 // 作用：修改自己的密码（登录页「修改密码」页签使用，
 // 普通用户不需要先登录也能改自己的密码，但必须输对原密码）。
+// LDAP 账号（无本地密码）返回 403「该账号使用 LDAP 登录」。
 // 请求体：{ username, oldPassword, newPassword }
 // 返回：{ ok }
 // ============================================================
@@ -28,10 +29,18 @@ export async function POST(request: Request) {
     }
     if (newPassword.length < 6) return errorResponse("新密码至少 6 位")
 
-    // 3. 校验原密码
+    // 3. 校验原密码（LDAP 账号无本地密码，不支持本地改密）
     const user = getUserByName(username)
-    const stored = user ? getPasswordHash(username) : null
-    if (!user || !stored || !verifyPassword(oldPassword, stored)) {
+    if (!user) {
+      console.warn(`[API 改密] 用户「${username}」不存在`)
+      return errorResponse("登录名或原密码不正确", 401)
+    }
+    const stored = getPasswordHash(username)
+    if (!stored) {
+      console.warn(`[API 改密] 用户「${username}」使用 LDAP 登录，不支持本地改密`)
+      return errorResponse("该账号使用 LDAP 登录，无需维护本地密码", 403)
+    }
+    if (!verifyPassword(oldPassword, stored)) {
       console.warn(`[API 改密] 用户「${username}」原密码校验失败`)
       return errorResponse("登录名或原密码不正确", 401)
     }

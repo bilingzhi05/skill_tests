@@ -1,7 +1,9 @@
-# Skill 任务后端 FastAPI 服务依赖
-# 安装：pip install -r server_requirements.txt
+# Skill task backend (FastAPI) dependencies
+# install: pip install -r server_requirements.txt
+# (keep this file ASCII-only: pip reads it with the system locale encoding)
 fastapi>=0.110
 uvicorn>=0.27
 python-multipart>=0.0.9
 PyYAML>=6.0
-# openpyxl 已随评审/分析工具链安装（结果过滤副本使用）
+ldap3>=2.9
+# openpyxl ships with the review/analysis toolchain (used by the result-filter copy)

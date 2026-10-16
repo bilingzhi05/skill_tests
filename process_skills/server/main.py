@@ -11,6 +11,9 @@ Skill 任务后端 —— FastAPI 应用。
     X-INTERNAL-TOKEN : 共享密钥（env SKILL_API_TOKEN 或 server_data/.api_token）
     X-USER           : 登录名
     X-IS-ADMIN       : "1" / "0"
+
+例外：登录前的 LDAP 校验接口（/api/backend/auth/ldap/*）只需 X-INTERNAL-TOKEN，
+不要求 X-USER（此时浏览器尚未登录），因此由 Next.js 登录路由直接调用。
 """
 from __future__ import annotations
 
@@ -24,7 +27,7 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, 
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from . import config, executor, skills_mgr, storage
+from . import config, executor, ldap_auth, skills_mgr, storage
 
 # 进程环境变量优先，缺失的键从 skill_tests/.env 兜底加载（如 JIRA_BOT_* / SMTP_*）
 config.load_env_file()
@@ -58,6 +61,15 @@ def admin_only(caller: Caller = Depends(auth)) -> Caller:
     return caller
 
 
+def internal_only(x_internal_token: str | None = Header(default=None)) -> None:
+    """只校验内部共享密钥，不要求用户身份。
+
+    供登录前调用的接口使用（此时浏览器还没有登录，Next.js 无法注入 X-USER）。
+    """
+    if not x_internal_token or x_internal_token != config.get_internal_token():
+        raise HTTPException(status_code=401, detail="内部令牌无效")
+
+
 @app.on_event("startup")
 def _startup() -> None:
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -75,6 +87,34 @@ def _startup() -> None:
 @app.get("/api/backend/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "service": "skill-task-backend", "time": storage.now_str()}
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 登录认证（LDAP）
+# ════════════════════════════════════════════════════════════════════════
+# 由 Next.js 登录路由在「登录前」调用，因此只需内部 Token、不要求 X-USER。
+# 密码仅在本次 LDAP bind 中即时使用，不落库、不写日志。
+class LdapVerifyBody(BaseModel):
+    username: str
+    password: str
+
+
+@app.get("/api/backend/auth/ldap/status")
+def api_ldap_status(_: None = Depends(internal_only)) -> dict[str, Any]:
+    """LDAP 是否已配置（登录页 / 登录路由据此决定是否走 LDAP）。"""
+    return {"ok": True, "enabled": ldap_auth.is_ldap_enabled()}
+
+
+@app.post("/api/backend/auth/ldap/verify")
+def api_ldap_verify(
+    body: LdapVerifyBody, _: None = Depends(internal_only)
+) -> dict[str, Any]:
+    """用「登录名 + 密码」做 LDAP bind 校验；未配置 LDAP 时 authenticated 恒为 False。"""
+    enabled = ldap_auth.is_ldap_enabled()
+    if not enabled:
+        return {"ok": True, "enabled": False, "authenticated": False}
+    authenticated = ldap_auth.authenticate_via_ldap(body.username.strip(), body.password)
+    return {"ok": True, "enabled": True, "authenticated": authenticated}
 
 
 # ════════════════════════════════════════════════════════════════════════

@@ -171,3 +171,10 @@ python run_jql_with_skill_demo.py \
 | `SKILL_API_BASE` | 前端代理的目标地址（默认 `http://127.0.0.1:12371`） |
 | `SKILL_DIR_ROOT` | Skill 根目录（默认 `Rubick/AmlAgent/expert-skills/log_analyse_skills`） |
 | `USER_DATA_DIR_ROOT` | 前端 user_data 根目录（默认 `aml_skill_review/data/user_data`） |
+| `LDAP_SERVER` | LDAP 服务器（**留空即禁用 LDAP**，登录回退本地密码）；配在 `skill_tests/.env` |
+| `LDAP_PORT` / `LDAP_USE_SSL` / `LDAP_VERIFY_SSL` | 端口（636）/ LDAPS / 证书校验（内网自签设 false） |
+| `LDAP_BASE_DN` / `LDAP_BIND_DN` / `LDAP_BIND_PASSWORD` | 搜索基准 DN / 服务账号 DN、密码 |
+| `LDAP_USER_SEARCH_FILTER` | 用户过滤器，默认 `(sAMAccountName={username})` |
+| `LDAP_SEARCH_SCOPE` / `LDAP_CONNECT_TIMEOUT` | 搜索范围（SUBTREE）/ 超时（10s） |
+
+> **登录认证**：登录时 **LDAP 优先**（后端 `process_skills/server/ldap_auth.py` 做域账号 bind 校验，密码不落库）→ **本地密码兜底**；LDAP 校验通过但本地无档案的登录名会自动建档（首个账号仍自动成为管理员）。LDAP 账号（`password_hash` 为空）不支持本地改密。

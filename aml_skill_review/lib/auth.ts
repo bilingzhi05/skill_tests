@@ -123,13 +123,27 @@ export function getPasswordHash(username: string): string | null {
 /**
  * 创建新用户。
  * 作用：注册 / 管理员添加账号时调用。密码只保存哈希。
+ * password 传空串表示「无本地密码」的 LDAP 账号（登录只走 LDAP 校验）。
  */
 export function createUser(username: string, password: string, isAdmin: boolean): AuthUser {
   const result = getAuthDb()
     .prepare('INSERT INTO "users" ("username", "password_hash", "is_admin", "create_t") VALUES (?, ?, ?, ?)')
-    .run(username, hashPassword(password), isAdmin ? 1 : 0, nowString())
+    .run(username, password ? hashPassword(password) : "", isAdmin ? 1 : 0, nowString())
   console.log(`[账户] 创建用户「${username}」，管理员=${isAdmin ? "是" : "否"}`)
   return getUserById(Number(result.lastInsertRowid))!
+}
+
+/**
+ * 为「通过 LDAP 校验」的账号登记本地档案（只存登录名与角色，不存密码）。
+ * 作用：LDAP 校验通过后调用；若该登录名首次出现则自动建档，
+ * 系统内第一个账号仍自动成为管理员。已存在则直接返回。
+ */
+export function provisionLdapUser(username: string): AuthUser {
+  const existing = getUserByName(username)
+  if (existing) return existing
+  const user = createUser(username, "", userCount() === 0)
+  console.log(`[账户] LDAP 账号「${username}」已自动建档，管理员=${user.is_admin === 1}`)
+  return user
 }
 
 /**

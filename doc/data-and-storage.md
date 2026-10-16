@@ -89,10 +89,12 @@ data/
 
 | 表 | 字段 |
 |---|---|
-| `users` | `id`、`username`、`password_hash`（scrypt 加盐）、`is_admin`、`create_t` |
+| `users` | `id`、`username`、`password_hash`（scrypt 加盐；**空串 = LDAP 账号**，无本地密码）、`is_admin`、`create_t` |
 | `sessions` | 会话编号 → 用户映射（供 Cookie `skill_review_session` 校验） |
 
 **第一个创建/登录的账号自动 `is_admin = 1`**（见 `lib/auth.ts` 的 `userCount()` 判断）。
+
+> LDAP 账号由「LDAP 校验通过」时自动建档（`provisionLdapUser`），只登记登录名与角色，**不存 LDAP 密码**；登录只走 LDAP，不支持本地登录 / 改密。
 
 ### 2.2 业务库 `<登录名>.db`
 
