@@ -258,7 +258,7 @@ export function NotificationCenter({
       { label: "最大处理条数", value: String(maxIssues) + (maxIssues === 0 ? "（全量）" : "") },
       { label: "通知邮箱", value: item.email || "-" },
       {
-        label: "触发方式",
+        label: "启动时间选择",
         value:
           item.mode === "once"
             ? `指定时间（${item.runAt || "-"}）`

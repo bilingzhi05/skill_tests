@@ -206,7 +206,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   const [formJql, setFormJql] = useState("")
   const [formMaxIssues, setFormMaxIssues] = useState("0")
   const [formEmail, setFormEmail] = useState("")
-  // 触发方式：immediate=立即执行，once=指定时间执行一次
+  // 启动时间选择：immediate=立即执行，once=指定时间执行一次
   const [formMode, setFormMode] = useState<"immediate" | "once">("immediate")
   const [formRunAt, setFormRunAt] = useState("") // datetime-local 控件值
   const [creating, setCreating] = useState(false)
@@ -458,14 +458,11 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
   async function handleCreate() {
     const name = formName.trim()
     const jql = formJql.trim()
-    const maxIssues = parseInt(formMaxIssues, 10)
-    const email = formEmail.trim()
+    // 普通用户表单里不显示这两项：最大处理条数固定全量(0)，通知邮箱固定为本人邮箱
+    const maxIssues = isAdmin ? parseInt(formMaxIssues, 10) : 0
+    const email = isAdmin ? formEmail.trim() : `${username}@amlogic.com`
     if (!name) {
       toast.error("请输入任务名称")
-      return
-    }
-    if (!formSkillPath) {
-      toast.error("请选择 skill")
       return
     }
     if (!jql) {
@@ -482,12 +479,13 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       }
       runAt = formRunAt.replace("T", " ")
     }
-    // 从选中的 skillPath 找到对应的 skillName
+    // 从选中的 skillPath 找到对应 skillName；未选 skill 时跑默认命令（不传 --skill）
     const selected = skills.find((s) => s.skillPath === formSkillPath)
-    if (!selected) {
+    if (formSkillPath && !selected) {
       toast.error("所选 skill 无效")
       return
     }
+    const skillName = selected?.skillName ?? ""
     setCreating(true)
     try {
       const res = await fetch("/api/backend/tasks", {
@@ -495,8 +493,8 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
-          skill: selected.skillName,
-          skillPath: selected.skillPath,
+          skill: skillName,
+          skillPath: formSkillPath,
           jql,
           maxIssues: Number.isFinite(maxIssues) ? maxIssues : 0,
           email,
@@ -557,10 +555,6 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       toast.error("任务名称已存在", { description: `配置「${name}」已存在，请更换名称` })
       return
     }
-    if (!formSkillPath) {
-      toast.error("请选择 skill")
-      return
-    }
     if (!jql) {
       toast.error("请输入 JQL 查询语句")
       return
@@ -574,7 +568,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       runAt = formRunAt.replace("T", " ")
     }
     const selected = skills.find((s) => s.skillPath === formSkillPath)
-    if (!selected) {
+    if (formSkillPath && !selected) {
       toast.error("所选 skill 无效")
       return
     }
@@ -586,8 +580,8 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
-          skill: selected.skillName,
-          skillPath: selected.skillPath,
+          skill: selected?.skillName ?? "",
+          skillPath: formSkillPath,
           jql,
           maxIssues: Number.isFinite(maxIssues) ? maxIssues : 0,
           email: formEmail.trim(),
@@ -628,8 +622,11 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
     setFormEmail(p.email || "")
     setFormMode(p.mode || "immediate")
     setFormRunAt(p.mode === "once" && p.runAt ? p.runAt.replace(" ", "T") : "")
-    // 恢复 skill：仅当该 skill 当前仍存在时才回填
-    if (p.skillPath && skills.some((s) => s.skillPath === p.skillPath)) {
+    // 恢复 skill：配置本身不含 skill（空）时按「不使用 Skill」回填，
+    // 否则仅当该 skill 当前仍存在时才回填
+    if (!p.skillPath) {
+      setFormSkillPath("")
+    } else if (skills.some((s) => s.skillPath === p.skillPath)) {
       setFormSkillPath(p.skillPath)
     } else {
       setFormSkillPath("")
@@ -769,7 +766,7 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
       { label: "最大处理条数", value: String(maxIssues) + (maxIssues === 0 ? "（全量）" : "") },
       { label: "通知邮箱", value: item.email || "-" },
       {
-        label: "触发方式",
+        label: "启动时间选择",
         value:
           item.mode === "once"
             ? `指定时间（${item.runAt || "-"}）`
@@ -953,7 +950,11 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
           新建任务
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          填写任务名称、选择 Skill（名称取自各 skill.md 的 name 字段）、输入 JQL、最大处理条数与通知邮箱；触发方式支持「立即执行」和「指定时间」。
+          填写任务名称、选择 Skill（名称取自各 skill.md 的 name 字段，可不选，不选则跑默认命令）、输入 JQL
+          {isAdmin ? "、最大处理条数与结果通知邮箱" : ""}；启动时间选择支持「立即执行」和「指定时间」。
+          {isAdmin
+            ? " 最大处理条数与结果通知邮箱仅管理员可填写。"
+            : " 普通用户提交时最大处理条数固定为全量，结果通知邮箱固定为本人邮箱。"}
           {!isAdmin && " 普通用户提交的任务需管理员审核通过后才会执行。"}
         </p>
         {/* 配置模板：保存当前配置 / 选择已保存配置加载或删除 */}
@@ -1008,14 +1009,18 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
               placeholder="例如：wifi 日志分析 - 10月"
             />
           </div>
-          {/* Skill 选择 */}
+          {/* Skill 选择（可不选，不选则跑默认命令） */}
           <div className="space-y-1.5">
             <Label>Skill</Label>
-            <Select value={formSkillPath} onValueChange={(v) => setFormSkillPath(String(v || ""))}>
+            <Select
+              value={formSkillPath || "__none_skill__"}
+              onValueChange={(v) => setFormSkillPath(v === "__none_skill__" ? "" : String(v || ""))}
+            >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="请选择 skill" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="__none_skill__">不使用 Skill（跑默认命令）</SelectItem>
                 {skills.length === 0 && (
                   <SelectItem value="__none__" disabled>
                     暂无可选 skill
@@ -1040,51 +1045,51 @@ export function TasksPage({ username, isAdmin }: { username: string; isAdmin: bo
               className="min-h-20 font-mono text-xs"
             />
           </div>
-          {/* 最大条数 */}
-          <div className="space-y-1.5">
-            <Label htmlFor="form-max">最大处理条数</Label>
-            <Input
-              id="form-max"
-              type="number"
-              min={0}
-              value={formMaxIssues}
-              onChange={(e) => setFormMaxIssues(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              0 表示全量分析，填 3 表示只分析 3 条
-            </p>
-          </div>
-          {/* 邮箱（可选） */}
-          <div className="space-y-1.5">
-            <Label htmlFor="form-email">结果通知邮箱（可选）</Label>
-            <Input
-              id="form-email"
-              type="email"
-              value={formEmail}
-              onChange={(e) => setFormEmail(e.target.value)}
-              placeholder="someone@example.com"
-            />
-          </div>
-
-          {/* 触发方式：立即 / 指定时间 */}
-          <div className="mt-4">
-            <Label>触发方式</Label>
-            <div className="mt-1.5 flex gap-2">
-              {([
-                { v: "immediate", label: "立即执行" },
-                { v: "once", label: "指定时间" },
-              ] as const).map((opt) => (
-                <Button
-                  key={opt.v}
-                  type="button"
-                  variant={formMode === opt.v ? "default" : "outline"}
-                  className="flex-1"
-                  onClick={() => setFormMode(opt.v)}
-                >
-                  {opt.label}
-                </Button>
-              ))}
+          {/* 最大条数（仅管理员可填写；普通用户固定全量） */}
+          {isAdmin && (
+            <div className="space-y-1.5">
+              <Label htmlFor="form-max">最大处理条数</Label>
+              <Input
+                id="form-max"
+                type="number"
+                min={0}
+                value={formMaxIssues}
+                onChange={(e) => setFormMaxIssues(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                0 表示全量分析，填 3 表示只分析 3 条
+              </p>
             </div>
+          )}
+          {/* 邮箱（仅管理员可填写；普通用户固定为本人邮箱） */}
+          {isAdmin && (
+            <div className="space-y-1.5">
+              <Label htmlFor="form-email">结果通知邮箱（可选）</Label>
+              <Input
+                id="form-email"
+                type="email"
+                value={formEmail}
+                onChange={(e) => setFormEmail(e.target.value)}
+                placeholder="someone@example.com"
+              />
+            </div>
+          )}
+
+          {/* 启动时间选择：立即 / 指定时间 */}
+          <div className="mt-4">
+            <Label>启动时间选择</Label>
+            <Select
+              value={formMode}
+              onValueChange={(v) => setFormMode(v as "immediate" | "once")}
+            >
+              <SelectTrigger className="mt-1.5 w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="immediate">立即执行</SelectItem>
+                <SelectItem value="once">指定时间</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           {/* 指定时间执行一次 */}
